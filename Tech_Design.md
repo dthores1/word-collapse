@@ -700,6 +700,13 @@ rather than overcounting via Scrabble-tournament short words.
     in a browser end-to-end** — the qualifies/highlight/error
     branches are covered by the implementation but unverified by a
     play session.
+  - **Bugfix (same day).** Pre-fill name input was uneditable —
+    clearing the field re-snapped to `lastName`. Cause: a defensive
+    `useEffect([lastName, name])` was rehydrating the input on every
+    keystroke that emptied it. `useHighScore` already reads
+    `lastName` synchronously in the `useState` initializer, so the
+    `useState(lastName || '')` initial value is always present on
+    the first render — the effect was redundant. Removed it.
 
 - **2026-05-09 — Iteration 6: submit button, validity cue, ambient cleanup.**
   - **Submit button inside the input.** New `SubmitButton`

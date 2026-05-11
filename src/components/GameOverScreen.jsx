@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 const DIFFICULTY_LABELS = {
   chill: 'Chill',
@@ -22,11 +22,6 @@ export function GameOverScreen({
 }) {
   const [name, setName] = useState(lastName || '');
   const [saved, setSaved] = useState(false);
-
-  // If lastName resolves after mount (e.g. localStorage read), pre-fill.
-  useEffect(() => {
-    if (!name && lastName) setName(lastName);
-  }, [lastName, name]);
 
   const qualifies = leaderboard.qualifies(score);
   const showNamePrompt =
