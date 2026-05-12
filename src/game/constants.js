@@ -24,6 +24,13 @@ export const BOARD_FRAME_PADDING = 28;
 export const MIN_TILE_SIZE = 34;
 export const MAX_TILE_SIZE = TILE_SIZE;
 
+// On narrow (mobile) viewports `useBoardGeometry` switches to width-only
+// sizing so tiles can grow into the available horizontal space — the page
+// is allowed to scroll vertically. This cap keeps tap targets generous
+// without making the board so tall it dominates the layout on phablets.
+export const NARROW_MAX_TILE_SIZE = 64;
+export const NARROW_VIEWPORT_BREAKPOINT = 640;
+
 /**
  * @typedef {{ tileSize: number, tileGap: number, cellStride: number, innerWidth: number, innerHeight: number }} BoardGeometry
  */

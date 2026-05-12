@@ -11,10 +11,17 @@ export default function App() {
   const { words, common, loading: dictLoading, error: dictError } = useDictionary();
   const game = useGame(words, common);
   const high = useHighScore();
-  const leaderboard = useLeaderboard(game.difficulty, {
-    enabled: game.phase === 'gameover',
-  });
   const [pendingDifficulty, setPendingDifficulty] = useState('standard');
+  // While the player is on the title screen the leaderboard fetches for
+  // their currently-selected difficulty so we can show the live top-1
+  // entry as the displayed high score. On gameover we switch to
+  // `game.difficulty` (which is what the round was actually played at).
+  // While playing we disable fetching to avoid background noise.
+  const displayDifficulty =
+    game.phase === 'gameover' ? game.difficulty : pendingDifficulty;
+  const leaderboard = useLeaderboard(displayDifficulty, {
+    enabled: game.phase !== 'playing',
+  });
 
   const handleStart = () => {
     game.start(pendingDifficulty);
@@ -38,7 +45,15 @@ export default function App() {
   );
 
   const isHighScore = high.isHighScore(game.difficulty, game.score);
-  const currentHighScore = high.scores[pendingDifficulty];
+  // Title-screen high score: prefer the live global #1 from the
+  // leaderboard so a fresh browser session sees real data immediately;
+  // fall back to the local personal best (set when the player saves to
+  // the leaderboard) so something always renders if the network call is
+  // still in flight or has failed.
+  const topGlobalEntry = leaderboard.entries[0];
+  const titleHighScore = topGlobalEntry
+    ? { name: topGlobalEntry.player_name, score: topGlobalEntry.score }
+    : high.scores[pendingDifficulty];
   const finalHighScore = high.scores[game.difficulty];
 
   return (
@@ -54,7 +69,8 @@ export default function App() {
           difficulty={pendingDifficulty}
           onSelectDifficulty={setPendingDifficulty}
           onStart={handleStart}
-          highScore={currentHighScore}
+          highScore={titleHighScore}
+          highScoreLoading={leaderboard.loading}
           dictionaryLoading={dictLoading}
         />
       )}

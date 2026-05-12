@@ -1,4 +1,10 @@
-// Lifeline buttons rendered to the right of the board.
+// Lifeline buttons.
+//
+// Two render modes:
+//   default   — large vertical sidecar used on the desktop play screen
+//               (rendered next to the board)
+//   compact   — small horizontal row used in the mobile action bar at
+//               the top of the play screen, where space is tight
 //
 // Each lifeline shows its remaining-uses badge in the top-right corner.
 // Disabled state mirrors the corresponding `*Uses` count being zero —
@@ -10,30 +16,34 @@ export function LifelinePanel({
   collapseUses,
   onBomb,
   onCollapse,
+  compact = false,
 }) {
+  const wrapper = compact ? 'flex gap-2' : 'flex gap-3 self-center flex-col';
   return (
-    <div className="flex flex-col gap-3 self-center">
+    <div className={wrapper}>
       <LifelineButton
-        icon={<BombIcon />}
+        icon={<BombIcon compact={compact} />}
         label="Bomb"
         sublabel="Clear top row"
         uses={bombUses}
         onClick={onBomb}
         tone="danger"
+        compact={compact}
       />
       <LifelineButton
-        icon={<CollapseIcon />}
+        icon={<CollapseIcon compact={compact} />}
         label="Collapse"
         sublabel="Compact tiles"
         uses={collapseUses}
         onClick={onCollapse}
         tone="primary"
+        compact={compact}
       />
     </div>
   );
 }
 
-function LifelineButton({ icon, label, sublabel, uses, onClick, tone }) {
+function LifelineButton({ icon, label, sublabel, uses, onClick, tone, compact }) {
   const disabled = uses <= 0;
   // Tailwind only sees fully-spelled class strings, so we branch on tone
   // here rather than building class names dynamically.
@@ -46,6 +56,13 @@ function LifelineButton({ icon, label, sublabel, uses, onClick, tone }) {
     : tone === 'danger'
       ? 'bg-danger-500 text-paper'
       : 'bg-warn-500 text-paper';
+  const sizeClass = compact
+    ? 'w-10 h-10 rounded-xl shadow-sm'
+    : 'w-16 h-16 rounded-2xl shadow-md';
+  const iconWrapClass = compact ? 'w-5 h-5' : 'w-8 h-8';
+  const badgeSizeClass = compact
+    ? 'min-w-[16px] h-[16px] text-[9px] -top-1 -right-1'
+    : 'min-w-[22px] h-[22px] text-[11px] -top-2 -right-2';
   return (
     <button
       type="button"
@@ -54,16 +71,18 @@ function LifelineButton({ icon, label, sublabel, uses, onClick, tone }) {
       title={`${label} — ${sublabel}`}
       aria-label={`${label} (${uses} ${uses === 1 ? 'use' : 'uses'} remaining)`}
       className={[
-        'relative w-16 h-16 rounded-2xl border-2 flex items-center justify-center transition shadow-md',
+        'relative border-2 flex items-center justify-center transition',
+        sizeClass,
         disabled
           ? 'bg-surface-soft border-border opacity-40 cursor-not-allowed'
           : enabledColor,
       ].join(' ')}
     >
-      <div className="w-8 h-8 flex items-center justify-center">{icon}</div>
+      <div className={`${iconWrapClass} flex items-center justify-center`}>{icon}</div>
       <span
         className={[
-          'absolute -top-2 -right-2 min-w-[22px] h-[22px] rounded-full text-[11px] font-bold flex items-center justify-center px-1 border-2 border-paper',
+          'absolute rounded-full font-bold flex items-center justify-center px-1 border-2 border-paper',
+          badgeSizeClass,
           badgeColor,
         ].join(' ')}
       >
@@ -73,11 +92,12 @@ function LifelineButton({ icon, label, sublabel, uses, onClick, tone }) {
   );
 }
 
-function BombIcon() {
+function BombIcon({ compact }) {
+  const size = compact ? 20 : 32;
   return (
     <svg
-      width="32"
-      height="32"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -93,11 +113,12 @@ function BombIcon() {
   );
 }
 
-function CollapseIcon() {
+function CollapseIcon({ compact }) {
+  const size = compact ? 20 : 32;
   return (
     <svg
-      width="32"
-      height="32"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

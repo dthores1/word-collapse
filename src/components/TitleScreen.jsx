@@ -7,13 +7,14 @@ export function TitleScreen({
   onSelectDifficulty,
   onStart,
   highScore,
+  highScoreLoading,
   dictionaryLoading,
 }) {
   return (
     <div className="min-h-screen w-full flex items-center justify-center px-4 py-8 sm:py-12">
       <div className="max-w-xl w-full space-y-8">
         <header className="text-center space-y-3">
-          <h1 className="font-display font-extrabold text-6xl sm:text-7xl tracking-tight leading-none">
+          <h1 className="font-display font-extrabold text-5xl sm:text-7xl tracking-tight leading-none">
             <span className="text-primary-800">Word</span>
             <span className="text-danger-500">Collapse</span>
           </h1>
@@ -66,6 +67,8 @@ export function TitleScreen({
                 </div>
                 <div className="text-xs text-ink-500">by {highScore.name}</div>
               </>
+            ) : highScoreLoading ? (
+              <div className="font-label text-sm text-ink-400">Loading…</div>
             ) : (
               <div className="font-label text-sm text-ink-400">No score yet</div>
             )}

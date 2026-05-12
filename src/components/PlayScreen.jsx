@@ -176,14 +176,56 @@ export function PlayScreen({ game, dictionary }) {
   const cfg = DIFFICULTY[game.difficulty];
 
   return (
-    <div className="min-h-[100dvh] w-full flex flex-col px-4 py-4 sm:px-6 sm:py-6">
-      <div className="max-w-3xl mx-auto w-full flex flex-col flex-1 min-h-0 gap-4 sm:gap-5">
-        {/* Header — clock, difficulty, score, words, stop */}
-        <div className="flex shrink-0 items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+    <div className="min-h-[100dvh] w-full px-3 py-3 sm:px-6 sm:py-6 sm:flex sm:flex-col">
+      {/* Page-level layout: on mobile we allow natural document flow so the
+          board can grow into a larger width-driven size and the page can
+          scroll vertically when needed. On desktop the flex-column with
+          flex-1 children keeps everything fit-to-viewport. */}
+      <div className="max-w-3xl mx-auto w-full flex flex-col gap-3 sm:flex-1 sm:min-h-0 sm:gap-5">
+        {/* ============================================================
+            MOBILE — single compact action bar.
+            Difficulty card and words count are dropped (difficulty is
+            chosen at round-start and never changes; words count is
+            available on the gameover screen). Lifelines live here too
+            so the player isn't forced to reach below the board for an
+            emergency bomb/collapse.
+            ============================================================ */}
+        <div className="flex sm:hidden shrink-0 items-center justify-between gap-2">
+          <Pill>
+            <ClockIcon />
+            <span className="font-mono text-base font-semibold tabular-nums">
+              {formatTime(game.elapsedMs)}
+            </span>
+          </Pill>
+          <div className="font-display font-extrabold text-2xl text-primary-800 leading-none tabular-nums">
+            {game.score}
+          </div>
+          <button
+            type="button"
+            onClick={game.stop}
+            className="w-9 h-9 shrink-0 rounded-full bg-danger-500 hover:bg-danger-600 active:bg-danger-700 flex items-center justify-center shadow-md shadow-danger-500/40 transition"
+            aria-label="Stop game"
+            title="Stop game"
+          >
+            <StopIcon />
+          </button>
+          <LifelinePanel
+            compact
+            bombUses={game.bombUses}
+            collapseUses={game.collapseUses}
+            onBomb={game.useBomb}
+            onCollapse={game.useCollapse}
+          />
+        </div>
+
+        {/* ============================================================
+            DESKTOP — original two-group header.
+            ============================================================ */}
+        <div className="hidden sm:flex shrink-0 items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <Pill>
               <ClockIcon />
-              <span className="font-mono text-lg sm:text-xl font-semibold tabular-nums">
+              <span className="font-mono text-xl font-semibold tabular-nums">
                 {formatTime(game.elapsedMs)}
               </span>
             </Pill>
@@ -191,19 +233,19 @@ export function PlayScreen({ game, dictionary }) {
               <div className="font-label text-[10px] tracking-widest uppercase text-ink-500">
                 Difficulty
               </div>
-              <div className="font-semibold capitalize text-ink-900 leading-tight">
+              <div className="text-base font-semibold capitalize text-ink-900 leading-tight">
                 {cfg.label}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-4 sm:gap-6">
+          <div className="flex items-center gap-6">
             <Stat value={game.score} label="Score" tone="primary" big />
             <Stat value={game.wordsCount} label="Words" />
             <button
               type="button"
               onClick={game.stop}
-              className="w-11 h-11 rounded-full bg-danger-500 hover:bg-danger-600 active:bg-danger-700 flex items-center justify-center shadow-lg shadow-danger-500/40 transition"
+              className="w-11 h-11 shrink-0 rounded-full bg-danger-500 hover:bg-danger-600 active:bg-danger-700 flex items-center justify-center shadow-lg shadow-danger-500/40 transition"
               aria-label="Stop game"
               title="Stop game"
             >
@@ -257,12 +299,15 @@ export function PlayScreen({ game, dictionary }) {
           </div>
         </div>
 
-        {/* Board with lifelines floated off the right edge — fills leftover vertical space */}
+        {/* Board area. On desktop the lifelines float as a vertical
+            sidecar to the right of the board; on mobile the lifelines
+            live in the top action bar so the board takes the full
+            horizontal slot here. */}
         <div
           ref={boardAreaRef}
-          className="flex min-h-[200px] min-w-0 flex-1 items-center justify-center py-1"
+          className="flex min-w-0 items-center justify-center py-1 sm:min-h-[200px] sm:flex-1"
         >
-          <div className="relative flex flex-col items-center gap-4 sm:inline-block sm:gap-0">
+          <div className="relative sm:inline-block">
             <div className="relative inline-block">
               <Board
                 geometry={boardGeometry}
@@ -281,7 +326,9 @@ export function PlayScreen({ game, dictionary }) {
               />
               <Toasts toasts={game.toasts} />
             </div>
-            <div className="flex w-full justify-center sm:absolute sm:top-1/2 sm:left-full sm:ml-4 sm:w-auto sm:-translate-y-1/2">
+            {/* Desktop sidecar lifelines only — mobile renders them in
+                the top action bar instead. */}
+            <div className="hidden sm:absolute sm:top-1/2 sm:left-full sm:ml-4 sm:flex sm:-translate-y-1/2">
               <LifelinePanel
                 bombUses={game.bombUses}
                 collapseUses={game.collapseUses}
@@ -372,13 +419,13 @@ function Stat({ value, label, tone = 'default', big = false }) {
       <div
         className={[
           'font-display font-extrabold leading-none',
-          big ? 'text-4xl sm:text-5xl' : 'text-2xl sm:text-3xl',
+          big ? 'text-3xl sm:text-5xl' : 'text-xl sm:text-3xl',
           tone === 'primary' ? 'text-primary-800' : 'text-ink-900',
         ].join(' ')}
       >
         {value}
       </div>
-      <div className="font-label text-[10px] tracking-widest uppercase text-ink-500 mt-1">
+      <div className="font-label text-[9px] sm:text-[10px] tracking-widest uppercase text-ink-500 mt-1">
         {label}
       </div>
     </div>

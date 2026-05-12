@@ -119,8 +119,18 @@ stored as a stack — `columns[c]` is an array of `Tile` objects,
 row `9 - i`. Empty cells (visual gaps in the column above the stack)
 live at rows `0..(9 - stack.length)`.
 
-Tile size is 46 px with 6 px gaps to keep the 10-row board in a
-typical laptop viewport (board inner dimensions ≈ 254 × 494 px).
+Tile size is responsive (`useBoardGeometry`):
+
+- **Desktop** (`availW ≥ 640`) — tiles fit-to-viewport, sized as
+  `min(widthFit, heightFit, MAX_TILE_SIZE=46)`. The play UI tries
+  hard to stay within one viewport so nothing scrolls during a round.
+- **Mobile / narrow** (`availW < 640`) — tiles are sized by **width
+  only**, capped at `NARROW_MAX_TILE_SIZE=64`. The 10-row board at
+  width-fit sizes is taller than a typical phone viewport, so the
+  page is allowed to scroll vertically — the tradeoff is large
+  tappable tiles. Horizontal lifelines below the board keep the
+  vertical overhead modest.
+
 Game seeds **3 rows** at start (`INITIAL_ROWS = 3`) so the player
 has real planning context from turn 0 and the playability scorer's
 "highest occupied row" check is meaningful immediately.
@@ -660,6 +670,65 @@ rather than overcounting via Scrabble-tournament short words.
 ---
 
 ## 10. Change log
+
+- **2026-05-11 — Aggressive mobile consolidation.**
+  - **Single top action bar on mobile.** Restructured the PlayScreen
+    header into two parallel renders: a compact mobile bar
+    (`flex sm:hidden`) holding `[⏰ timer · score · stop · 💣 · ⬇]`,
+    and the original two-group desktop header (`hidden sm:flex`).
+    Difficulty card and words count are dropped on mobile — difficulty
+    is a round-start choice and words count is available on the
+    gameover screen.
+  - **Lifelines moved into the mobile header.** Lifelines no longer
+    render below the board on mobile; they're now the rightmost
+    elements in the top action bar. Tradeoff acknowledged: lifelines
+    are out of the easy-reach thumb zone, but stay one tap away from
+    every gameplay moment, and the previously-stacked horizontal
+    row below the board cost ~70 px of vertical real estate.
+  - **`LifelinePanel` gains a `compact` prop.** Compact = 40 × 40 px
+    rounded-xl buttons with smaller icons (20 px) and a smaller
+    16 px badge; horizontal flex always. Default unchanged (64 × 64
+    rounded-2xl vertical for the desktop sidecar).
+  - **Desktop lifelines moved to `hidden sm:flex` sidecar only.**
+    The old mobile-stacked lifeline row below the board has been
+    removed; only the absolute-positioned right-side sidecar
+    remains, gated by `sm:` breakpoint.
+
+- **2026-05-11 — Mobile polish pass.**
+  - **Width-driven tile sizing on narrow viewports.** `useBoardGeometry`
+    now branches on `availW < NARROW_VIEWPORT_BREAKPOINT (640px)`: on
+    narrow widths it ignores the height constraint and uses width-only
+    sizing capped at `NARROW_MAX_TILE_SIZE=64`. The page is allowed to
+    scroll vertically on mobile — the tradeoff is tap-target tiles
+    that fill the horizontal space, which the player explicitly asked
+    for. Desktop branch unchanged (still fit-to-viewport with cap 46).
+  - **Horizontal lifelines on mobile.** `LifelinePanel` is now
+    `flex gap-3 sm:flex-col` — row of two buttons below the board on
+    mobile, column sidecar on desktop. Cuts the vertical overhead of
+    the lifeline area roughly in half.
+  - **PlayScreen layout drops fit-to-viewport on mobile.** Outer
+    container is now `sm:flex sm:flex-col` (no flex on mobile) and the
+    inner container loses `flex-1 min-h-0` on mobile so content can
+    push the page taller than the viewport. Header gets tighter mobile
+    spacing: `gap-2 sm:gap-3`, smaller score (`text-3xl sm:text-5xl`),
+    smaller stop button (`w-10 sm:w-11`), and slimmer difficulty card
+    padding.
+  - **GameOver Save button overflow fix.** Name input + Save are now
+    `flex flex-col gap-3 sm:flex-row` so on mobile they stack
+    vertically (button gets `w-full sm:w-auto`); on desktop they
+    stay side-by-side. Outer card padding reduced from
+    `p-8 sm:p-12` to `p-5 sm:p-12` and outer page padding from
+    `px-4 py-8` to `px-3 py-6 sm:px-4 sm:py-8` so the card breathes
+    on narrow phones.
+  - **Title screen high score now uses the live leaderboard.** App
+    enables `useLeaderboard` whenever `game.phase !== 'playing'`,
+    keyed off `pendingDifficulty` on the title screen and
+    `game.difficulty` on gameover. The title's "High Score" card
+    prefers the global top-1 entry from the leaderboard, falling back
+    to the local personal best when the network hasn't responded yet
+    or the leaderboard is empty. Shows a `Loading…` placeholder while
+    the cold-start fetch is in flight. Closes the *"first visit shows
+    No score yet"* gap.
 
 - **2026-05-10 — Remote leaderboard wired up.**
   - **API service.** Hooked the game to `wordcollapse-api.fly.dev`

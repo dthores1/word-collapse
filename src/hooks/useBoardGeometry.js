@@ -5,22 +5,37 @@ import {
   makeBoardGeometry,
   MAX_TILE_SIZE,
   MIN_TILE_SIZE,
+  NARROW_MAX_TILE_SIZE,
+  NARROW_VIEWPORT_BREAKPOINT,
   ROWS,
   TILE_GAP,
   TILE_SIZE,
 } from '../game/constants.js';
 
-// Horizontal slack for the lifeline column (`left-full ml-4`) beside the board.
+// Horizontal slack reserved for the lifeline column rendered to the right
+// of the board on desktop (`left-full ml-4` plus the column itself).
 const LIFELINE_SIDECAR_RESERVE = 96;
-// Narrow layout stacks lifelines under the board — reserve vertical space so the
-// grid still fits without forcing page scroll.
-const STACKED_LIFELINE_ALLOWANCE = 168;
-const NARROW_BREAKPOINT = 640;
 
 /**
- * Computes tile scale from the board slot size so the grid fits without page scroll.
- * Uses `100dvh`-friendly flex layout in PlayScreen — `containerRef` must wrap the
- * region that should constrain the board (typically `flex-1 min-h-0`).
+ * Computes tile size from the board slot dimensions so the grid fits the
+ * available space appropriately.
+ *
+ * Two regimes:
+ *
+ *   • DESKTOP (`availW >= NARROW_VIEWPORT_BREAKPOINT`) — tile size is the
+ *     smallest of the width-derived and height-derived fits, capped at
+ *     `MAX_TILE_SIZE`. The play UI tries hard to stay within one viewport
+ *     so nothing scrolls during a round.
+ *
+ *   • MOBILE / NARROW — tile size is driven by width only, capped at
+ *     `NARROW_MAX_TILE_SIZE`. The page is allowed to scroll vertically:
+ *     a 10-row board at width-fit tile sizes is taller than most phone
+ *     viewports, but the player explicitly preferred big tap targets over
+ *     compact-fit. Horizontal lifelines (see `LifelinePanel`) keep the
+ *     vertical overhead modest.
+ *
+ * `containerRef` must wrap the region whose **width** should constrain
+ * the board (typically the play-area flex slot inside PlayScreen).
  *
  * @param {React.RefObject<HTMLElement | null>} containerRef
  */
@@ -37,25 +52,35 @@ export function useBoardGeometry(containerRef) {
       const availH = rect.height;
       const frame = BOARD_FRAME_PADDING * 2;
 
-      if (availW < 32 || availH < 32) {
+      if (availW < 32) {
         setGeometry(makeBoardGeometry(MIN_TILE_SIZE));
         return;
       }
 
-      const isNarrow = availW < NARROW_BREAKPOINT;
-      const lifelineReserveX = isNarrow ? 0 : LIFELINE_SIDECAR_RESERVE;
-      const lifelineReserveY = isNarrow ? STACKED_LIFELINE_ALLOWANCE : 0;
-
-      const innerW = availW - frame - lifelineReserveX;
-      const innerH = availH - frame - lifelineReserveY;
-
       const gapRatio = TILE_GAP / TILE_SIZE;
-      const rowPitch = ROWS + (ROWS - 1) * gapRatio;
       const colPitch = COLS + (COLS - 1) * gapRatio;
+      const rowPitch = ROWS + (ROWS - 1) * gapRatio;
 
-      const fromW = innerW / colPitch;
-      const fromH = innerH / rowPitch;
-      let tileSize = Math.min(fromW, fromH, MAX_TILE_SIZE);
+      const isNarrow = availW < NARROW_VIEWPORT_BREAKPOINT;
+      let tileSize;
+
+      if (isNarrow) {
+        // Width-only fit. We deliberately ignore `availH` here — on a
+        // phone the 10-row board is almost always taller than the
+        // viewport at usable tile sizes, and the page is configured to
+        // scroll on mobile (see PlayScreen layout).
+        const innerW = availW - frame;
+        tileSize = Math.min(innerW / colPitch, NARROW_MAX_TILE_SIZE);
+      } else {
+        // Desktop: fit-to-viewport. Reserve space for the right-hand
+        // lifeline sidecar.
+        const innerW = availW - frame - LIFELINE_SIDECAR_RESERVE;
+        const innerH = availH - frame;
+        const fromW = innerW / colPitch;
+        const fromH = innerH / rowPitch;
+        tileSize = Math.min(fromW, fromH, MAX_TILE_SIZE);
+      }
+
       tileSize = Math.max(tileSize, MIN_TILE_SIZE);
       tileSize = Math.round(tileSize * 4) / 4;
 

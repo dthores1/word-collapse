@@ -37,8 +37,8 @@ export function GameOverScreen({
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center px-4 py-8">
-      <div className="max-w-2xl w-full bg-paper border border-border rounded-3xl p-8 sm:p-12 shadow-2xl space-y-7">
+    <div className="min-h-screen w-full flex items-center justify-center px-3 py-6 sm:px-4 sm:py-8">
+      <div className="max-w-2xl w-full bg-paper border border-border rounded-3xl p-5 sm:p-12 shadow-2xl space-y-6 sm:space-y-7">
         <div className="text-center space-y-3">
           <div className="font-label text-xs tracking-widest uppercase text-ink-500">
             Game Over
@@ -69,7 +69,10 @@ export function GameOverScreen({
             <div className="text-center font-semibold text-ink-900">
               You made the top 10! Add your name:
             </div>
-            <div className="flex gap-3">
+            {/* Stack input + Save vertically on mobile so the Save
+                button never gets pushed off the right edge on narrow
+                viewports. */}
+            <div className="flex flex-col gap-3 sm:flex-row">
               <input
                 type="text"
                 value={name}
@@ -78,14 +81,14 @@ export function GameOverScreen({
                 placeholder="Your name"
                 maxLength={20}
                 disabled={leaderboard.submitting}
-                className="flex-1 px-5 py-3 rounded-2xl border-2 border-secondary-500 text-lg outline-none focus:ring-2 focus:ring-secondary-500/40 disabled:opacity-60"
+                className="w-full sm:flex-1 min-w-0 px-5 py-3 rounded-2xl border-2 border-secondary-500 text-lg outline-none focus:ring-2 focus:ring-secondary-500/40 disabled:opacity-60"
                 autoFocus
               />
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={leaderboard.submitting || !name.trim()}
-                className="px-7 py-3 bg-primary-800 hover:bg-primary-900 active:bg-primary-950 text-paper font-semibold rounded-2xl transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full sm:w-auto px-7 py-3 bg-primary-800 hover:bg-primary-900 active:bg-primary-950 text-paper font-semibold rounded-2xl transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {leaderboard.submitting ? 'Saving…' : 'Save'}
               </button>
