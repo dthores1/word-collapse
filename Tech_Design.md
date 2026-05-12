@@ -455,17 +455,27 @@ Three input flows feed the same selection:
   tap selection.
 - **Keyboard** — `<input>` tracks `typed`. Each keystroke runs
   `findPath(grid, typed)` and highlights the resolved tiles. `Enter`
-  submits, `Escape` clears.
-- **Submit button (✓)** — rendered inside the input card on the
-  right; clicking it submits whatever is in `currentInput`
-  (selection letters or typed string). Three visual states:
-  disabled grey when length < 3 or no realisable path; primary navy
-  when length ≥ 3 but the word isn't in ENABLE (clickable, will
-  trigger the shake reject); success green when the word is in
-  ENABLE (clickable, will score). Crucial for mobile players in
-  tap-mode and as a discoverability anchor for the re-tap-last
-  gesture. Paired with a one-shot session hint that surfaces the
-  first time a tap-built selection reaches 3 letters.
+  submits, `Escape` clears. **Desktop only**: on narrow viewports
+  (`window.innerWidth < 640`) the entire input card is `hidden` and
+  the auto-focus useEffect short-circuits, so the on-screen keyboard
+  never appears. Mobile players have no word display at all — the
+  selection is conveyed by tile highlight + connecting line, and the
+  ✓ FAB on the board's bottom-right corner serves as both submit and
+  live validity cue (see Submit button below).
+- **Submit button (✓)** — two placements share the same
+  `SubmitButton` component with a `large` prop:
+    - **Desktop** — small 36×36 button inside the input card on the
+      right.
+    - **Mobile** — large 56×56 FAB anchored to the board's
+      bottom-right corner (`absolute -bottom-3 -right-3 z-10`),
+      rendered as a sibling of `<Board>`.
+  Three visual states (both placements): disabled grey when length <
+  3 or no realisable path; primary navy when length ≥ 3 but the word
+  isn't in ENABLE (clickable, will trigger the shake reject); success
+  green when the word is in ENABLE (clickable, will score). On
+  desktop, paired with a one-shot session hint that surfaces the
+  first time a tap-built selection reaches 3 letters — the hint is
+  omitted on mobile since the FAB itself is unmissable.
 
 Mode-switch rules:
 
@@ -670,6 +680,39 @@ rather than overcounting via Scrabble-tournament short words.
 ---
 
 ## 10. Change log
+
+- **2026-05-12 — Mobile keyboard + scroll fixes.**
+  - **No `<input>` or word card on mobile.** PlayScreen's input card
+    is now `hidden sm:flex` — desktop keeps the real `<input>` for
+    keyboard play, mobile shows nothing in its place. The auto-focus
+    useEffect short-circuits when `window.innerWidth < 640`, so
+    nothing summons the on-screen keyboard. The current word being
+    built is conveyed entirely by tile highlight + connecting line
+    on the board. Closes the *"keyboard pops up and eats half the
+    screen the moment the round starts (and stays up when tapping
+    tiles)"* report.
+    - Earlier draft kept a read-only word display panel on mobile;
+      removed after the user confirmed they wanted no card at all.
+  - **Mobile ✓ FAB on the board.** New `large` prop on
+    `SubmitButton` (56×56, rounded-2xl, larger check icon).
+    Rendered as a sibling of `<Board>` inside the board area with
+    `absolute -bottom-3 -right-3 z-10 sm:hidden`, so it overlaps
+    the board card's bottom-right corner. Same three color states
+    as the desktop ✓ — grey disabled / navy clickable-but-invalid /
+    green valid-word — so the FAB doubles as a live validity cue.
+    Disabled state gets a subtle border so it doesn't blend into
+    the paper-colored board card.
+  - **Per-tile `touch-action` instead of container-wide.** `Board.jsx`
+    used to set `touch-action: none` on the whole grid container,
+    which blocked vertical page scroll when the finger was anywhere
+    on the board. Moved `touch-action: none` onto the absolutely
+    positioned tile elements only; the container and the empty-cell
+    placeholders default to `auto`, so touches on empty grid space
+    let the page scroll. Drag-selects still capture cleanly because
+    they begin on a tile (where `touch-action: none` applies) and
+    `setPointerCapture` carries the gesture across the rest of the
+    grid. Closes the *"can't scroll the page while touching the
+    board"* report.
 
 - **2026-05-11 — Aggressive mobile consolidation.**
   - **Single top action bar on mobile.** Restructured the PlayScreen

@@ -96,8 +96,13 @@ export function PlayScreen({ game, dictionary }) {
   }, [game.phase]);
 
   // Keep the keyboard input focused so typing-only play needs no clicks.
+  // Skipped on narrow viewports — the input is hidden there (mobile uses
+  // pure tap/drag), and focusing it would pop the on-screen keyboard and
+  // chew up half the screen for nothing.
   useEffect(() => {
-    if (game.phase === 'playing') inputRef.current?.focus();
+    if (game.phase !== 'playing') return;
+    if (typeof window !== 'undefined' && window.innerWidth < 640) return;
+    inputRef.current?.focus();
   }, [game.phase]);
 
   // Global auto-focus: any letter keypress while the input is unfocused
@@ -255,8 +260,12 @@ export function PlayScreen({ game, dictionary }) {
         </div>
 
         {/* Input + Board + Next-row stack — board grows into remaining viewport height. */}
-        <div className="flex shrink-0 flex-col items-center gap-4 sm:gap-5">
-          {/* Word input + submit button */}
+        {/* Word input + submit button — DESKTOP ONLY.
+            Mobile has no input or word card; the ✓ lives as a FAB on
+            the board's bottom-right corner (see below). Focusing an
+            <input> on a phone summons the OS keyboard, which eats half
+            the screen for nothing when input is via tap/drag. */}
+        <div className="hidden sm:flex shrink-0 flex-col items-center gap-4 sm:gap-5">
           <div className="w-full max-w-sm flex flex-col items-center gap-1">
             <div className="rounded-2xl bg-paper border border-border shadow-md pl-4 pr-2 py-2 w-full flex items-center gap-2">
               <input
@@ -325,6 +334,19 @@ export function PlayScreen({ game, dictionary }) {
                 onCommit={commitSelection}
               />
               <Toasts toasts={game.toasts} />
+              {/* Mobile-only submit FAB anchored to the board's
+                  bottom-right corner. Color states match the desktop
+                  ✓ inside the input card: grey when input is too short
+                  or has no realisable path, navy when length-OK but
+                  not in ENABLE, green when the word will score. */}
+              <div className="sm:hidden absolute -bottom-3 -right-3 z-10">
+                <SubmitButton
+                  large
+                  enabled={canSubmit}
+                  valid={isValidWord}
+                  onClick={handleEnter}
+                />
+              </div>
             </div>
             {/* Desktop sidecar lifelines only — mobile renders them in
                 the top action bar instead. */}
@@ -441,14 +463,18 @@ function Stat({ value, label, tone = 'default', big = false }) {
 //   (true, true)  — success green: clickable, word is in ENABLE, will
 //                   actually score.
 //
-// Sized for mobile touch (36×36 inside a 32×32 padded input card) and
-// reachable via Tab + Enter for keyboard users.
-function SubmitButton({ enabled, valid, onClick }) {
+// Sized for mobile touch (36×36 inside the desktop input card; 56×56
+// FAB variant on mobile, anchored to the board corner) and reachable
+// via Tab + Enter for keyboard users.
+function SubmitButton({ enabled, valid, onClick, large = false }) {
   const colorClass = !enabled
-    ? 'bg-surface-soft text-ink-300 cursor-not-allowed'
+    ? 'bg-surface-soft text-ink-400 cursor-not-allowed border border-border'
     : valid
-      ? 'bg-good text-paper hover:brightness-110 active:scale-95 shadow-md shadow-good/30'
-      : 'bg-primary-800 text-paper hover:bg-primary-900 active:scale-95 shadow-md shadow-primary-800/30';
+      ? 'bg-good text-paper hover:brightness-110 active:scale-95 shadow-lg shadow-good/40'
+      : 'bg-primary-800 text-paper hover:bg-primary-900 active:scale-95 shadow-lg shadow-primary-800/40';
+  const sizing = large
+    ? 'w-14 h-14 rounded-2xl'
+    : 'w-9 h-9 rounded-xl';
   return (
     <button
       type="button"
@@ -458,20 +484,21 @@ function SubmitButton({ enabled, valid, onClick }) {
       title="Submit word (Enter)"
       tabIndex={0}
       className={[
-        'shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition',
+        'shrink-0 flex items-center justify-center transition',
+        sizing,
         colorClass,
       ].join(' ')}
     >
-      <CheckIcon />
+      <CheckIcon size={large ? 28 : 18} />
     </button>
   );
 }
 
-function CheckIcon() {
+function CheckIcon({ size = 18 }) {
   return (
     <svg
-      width="18"
-      height="18"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

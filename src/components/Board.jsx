@@ -255,6 +255,11 @@ export function Board({
         width: 'fit-content',
       }}
     >
+      {/* `touch-action` is intentionally NOT set on the container — touches
+          on empty cells (placeholders) should fall through to the page so
+          the user can scroll on mobile. We instead set `touch-action: none`
+          on populated tiles below, which is enough to prevent the browser
+          scrolling during a real drag-select that begins on a tile. */}
       <div
         ref={containerRef}
         onPointerDown={handlePointerDown}
@@ -265,7 +270,6 @@ export function Board({
           position: 'relative',
           width: BOARD_INNER_WIDTH,
           height: BOARD_INNER_HEIGHT,
-          touchAction: 'none',
           userSelect: 'none',
         }}
       >
@@ -367,6 +371,11 @@ function Tile({ geometry, letter, row, col, selected, clearing, exploding, explo
         opacity: mounted ? 1 : 0,
         willChange: 'transform',
         animationDelay: explodeDelay ? `${explodeDelay}ms` : undefined,
+        // Block browser scrolling/zoom *when the touch starts on a tile*.
+        // Touches on empty cells fall back to `touch-action: auto`, so the
+        // page can scroll on mobile when the finger lands on empty grid
+        // space. See the container comment in `Board` for the full story.
+        touchAction: 'none',
       }}
     >
       {letter}
