@@ -6,16 +6,20 @@ import {
 } from '../game/constants.js';
 
 // =====================================================================
-// Board — renders the 5×5 grid with absolutely-positioned tiles.
+// Board — renders the 5×ROWS grid with absolutely-positioned tiles.
 //
 // Tiles animate via CSS `transition` on `transform`, so when a tile's
 // (row, col) changes (gravity, row arrival) it glides to its new spot.
-// New tiles enter from below the board (row = ROWS) and animate up to
-// their final row.
+// New tiles enter from below the board (renderRow = ROWS) and animate
+// up to their final row.
 //
 // The whole board is one pointer-capture surface for drag selection —
 // the parent passes in callbacks plus the current `selectedIds` set so
 // we can tint selected tiles.
+//
+// The Board always renders the full 10-row grid. PlayScreen wraps it
+// in a scrollable container on mobile so only ~7 rows are visible at
+// a time without the Board itself having to crop anything.
 // =====================================================================
 export function Board({
   geometry,
@@ -32,8 +36,6 @@ export function Board({
   redFlashKey,
   onSelectionChange,
   onCommit,
-  viewportRows = ROWS,
-  topRow = 0,
 }) {
   const {
     tileSize,
@@ -41,15 +43,7 @@ export function Board({
     framePadding,
     innerWidth: BOARD_INNER_WIDTH,
   } = geometry;
-  // Sliding viewport. The board is *logically* still ROWS tall —
-  // gameplay, gravity, overflow detection, path finding all unchanged.
-  // We only show `viewportRows` rows at a time, starting at `topRow`,
-  // so the visible window scrolls from the bottom (rows 3-9 at game
-  // start) toward the top (rows 0-6 near overflow) as columns fill.
-  const viewport = Math.max(1, Math.min(ROWS, viewportRows));
-  const safeTop = Math.max(0, Math.min(ROWS - viewport, topRow));
-  const yOffset = safeTop * cellStride;
-  const visibleInnerHeight = viewport * tileSize + (viewport - 1) * (cellStride - tileSize);
+  const INNER_HEIGHT = ROWS * tileSize + (ROWS - 1) * (cellStride - tileSize);
   const containerRef = useRef(null);
   const draggingRef = useRef(false);
   const movedRef = useRef(false);
@@ -82,7 +76,7 @@ export function Board({
     el.classList.add('animate-shake-hard');
   }, [hardShakeKey]);
 
-  // Flatten tiles → list of { id, letter, row, col, isClearing, isExploding, isScrambling }.
+  // Flatten tiles → list of { id, letter, row, col, clearing, exploding, scrambling }.
   const tiles = useMemo(() => {
     const out = [];
     for (let c = 0; c < COLS; c++) {
@@ -105,24 +99,17 @@ export function Board({
   }, [columns, clearingIds, explodingIds, scramblingIds]);
 
   // ---- pointer-driven drag selection ----
-  // (clientY → row) accounts for the cropped top: the container's local
-  // y=0 corresponds to the first *visible* row, so add `yOffset` to map
-  // back into the full-board coordinate space the rest of the code uses.
-  // Reject taps/drags outside the visible viewport so pointer-capture
-  // can't pick a row that's clipped off-screen.
   const pickTile = (clientX, clientY) => {
     const container = containerRef.current;
     if (!container) return null;
     const rect = container.getBoundingClientRect();
     const x = clientX - rect.left;
-    const yLocal = clientY - rect.top;
-    if (x < 0 || yLocal < 0) return null;
-    if (yLocal > visibleInnerHeight) return null;
-    const y = yLocal + yOffset;
+    const y = clientY - rect.top;
+    if (x < 0 || y < 0) return null;
+    if (x > BOARD_INNER_WIDTH || y > INNER_HEIGHT) return null;
     const col = Math.floor(x / cellStride);
     const row = Math.floor(y / cellStride);
-    if (row < safeTop || row >= safeTop + viewport) return null;
-    if (col < 0 || col >= COLS) return null;
+    if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return null;
     const xInCell = x - col * cellStride;
     const yInCell = y - row * cellStride;
     if (xInCell > tileSize || yInCell > tileSize) return null;
@@ -226,7 +213,6 @@ export function Board({
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
 
     const wasDrag = movedRef.current;
-    const path = pathRef.current;
 
     if (wasDrag) {
       // Drag commits unconditionally; PlayScreen handles too-short paths.
@@ -251,8 +237,6 @@ export function Board({
   };
 
   // ---- selection-line geometry ----
-  // y coords subtract `yOffset` so the SVG lives in the cropped container's
-  // coordinate space (where the topmost visible row sits at y = 0).
   const linePoints = useMemo(() => {
     if (!selectedIds || selectedIds.size === 0) return [];
     const idToPos = new Map();
@@ -263,9 +247,9 @@ export function Board({
       .sort((a, b) => orderInPath(a.id, b.id, selectedIds))
       .map((t) => ({
         x: t.col * cellStride + tileSize / 2,
-        y: t.row * cellStride + tileSize / 2 - yOffset,
+        y: t.row * cellStride + tileSize / 2,
       }));
-  }, [tiles, selectedIds, cellStride, tileSize, yOffset]);
+  }, [tiles, selectedIds, cellStride, tileSize]);
 
   return (
     <div
@@ -281,10 +265,10 @@ export function Board({
       }}
     >
       {/* `touch-action` is intentionally NOT set on the container — touches
-          on empty cells (placeholders) should fall through to the page so
-          the user can scroll on mobile. We instead set `touch-action: none`
-          on populated tiles below, which is enough to prevent the browser
-          scrolling during a real drag-select that begins on a tile. */}
+          on empty cells (placeholders) and gaps fall through to the parent
+          scroll container so the player can pan the board on mobile when
+          they're not landing on a tile. Tiles below have
+          `touch-action: none` to block scroll during real drag-selects. */}
       <div
         ref={containerRef}
         onPointerDown={handlePointerDown}
@@ -294,17 +278,14 @@ export function Board({
         style={{
           position: 'relative',
           width: BOARD_INNER_WIDTH,
-          height: visibleInnerHeight,
+          height: INNER_HEIGHT,
           userSelect: 'none',
-          // CSS transition on height drives the "board opens up" animation
-          // as columns grow tall enough to demand more visible rows.
-          transition: 'height 240ms cubic-bezier(0.25, 0.8, 0.25, 1)',
         }}
       >
-        {/* Empty-cell placeholders — only for the *visible* rows. Their
-            row index is offset so positioning matches the cropped view. */}
-        {Array.from({ length: viewport * COLS }).map((_, i) => {
-          const r = Math.floor(i / COLS) + safeTop;
+        {/* Empty-cell placeholders so the grid reads as a full grid even
+            when sparse. */}
+        {Array.from({ length: ROWS * COLS }).map((_, i) => {
+          const r = Math.floor(i / COLS);
           const c = i % COLS;
           const corner = Math.round(16 * (tileSize / TILE_SIZE));
           return (
@@ -314,7 +295,7 @@ export function Board({
                 position: 'absolute',
                 width: tileSize,
                 height: tileSize,
-                transform: `translate(${c * cellStride}px, ${r * cellStride - yOffset}px)`,
+                transform: `translate(${c * cellStride}px, ${r * cellStride}px)`,
                 borderRadius: corner,
                 background: 'transparent',
                 border: '1px dashed rgba(15, 23, 42, 0.05)',
@@ -328,7 +309,7 @@ export function Board({
         {linePoints.length >= 2 && (
           <svg
             width={BOARD_INNER_WIDTH}
-            height={visibleInnerHeight}
+            height={INNER_HEIGHT}
             style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
           >
             <polyline
@@ -350,7 +331,6 @@ export function Board({
             letter={t.letter}
             row={t.row}
             col={t.col}
-            yOffset={yOffset}
             selected={selectedIds?.has(t.id)}
             clearing={t.clearing}
             exploding={t.exploding}
@@ -366,7 +346,7 @@ export function Board({
   );
 }
 
-function Tile({ geometry, letter, row, col, yOffset = 0, selected, clearing, exploding, scrambling, explodeDelay = 0 }) {
+function Tile({ geometry, letter, row, col, selected, clearing, exploding, scrambling, explodeDelay = 0 }) {
   const { tileSize, cellStride } = geometry;
   // First mount: render below the board, then transition into final spot.
   const [mounted, setMounted] = useState(false);
@@ -377,11 +357,7 @@ function Tile({ geometry, letter, row, col, yOffset = 0, selected, clearing, exp
 
   const renderRow = mounted ? row : ROWS;
   const x = col * cellStride;
-  // Subtract the cropped-rows offset so tile y maps into the visible
-  // container's coordinate space (top-visible-row = y 0). When the row
-  // is in the cropped area, y goes negative and the parent's
-  // overflow: hidden clips the tile.
-  const y = renderRow * cellStride - yOffset;
+  const y = renderRow * cellStride;
   const fontSize = Math.round(28 * (tileSize / TILE_SIZE));
 
   return (
@@ -397,7 +373,7 @@ function Tile({ geometry, letter, row, col, yOffset = 0, selected, clearing, exp
               ? 'animate-tile-scramble'
               : '',
         selected
-          ? 'bg-primary-800 text-paper border-primary-900 shadow-lg shadow-primary-800/40 scale-[1.05]'
+          ? 'bg-primary-800 text-paper border-primary-900 shadow-xl shadow-primary-800/50'
           : exploding
             ? 'bg-danger-500 text-paper border-danger-600 shadow-lg shadow-danger-500/60'
             : 'bg-paper text-primary-800 border-border shadow-md',
@@ -408,14 +384,14 @@ function Tile({ geometry, letter, row, col, yOffset = 0, selected, clearing, exp
         fontSize,
         transform: `translate(${x}px, ${y}px)`,
         transition:
-          'transform 200ms cubic-bezier(0.25, 0.8, 0.25, 1), background-color 120ms, color 120ms, box-shadow 120ms, scale 120ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 180ms ease-out',
+          'transform 200ms cubic-bezier(0.25, 0.8, 0.25, 1), background-color 120ms, color 120ms, box-shadow 120ms, opacity 180ms ease-out',
         opacity: mounted ? 1 : 0,
         willChange: 'transform',
         animationDelay: explodeDelay ? `${explodeDelay}ms` : undefined,
-        // Block browser scrolling/zoom *when the touch starts on a tile*.
-        // Touches on empty cells fall back to `touch-action: auto`, so the
-        // page can scroll on mobile when the finger lands on empty grid
-        // space. See the container comment in `Board` for the full story.
+        // Block browser scrolling/zoom when the touch starts on a tile.
+        // Empty cells / gaps default to `touch-action: auto`, so a pan
+        // gesture that begins on empty grid space is handled by the
+        // parent scroll container.
         touchAction: 'none',
       }}
     >

@@ -4,35 +4,18 @@ import { LifelinePanel } from './LifelinePanel.jsx';
 import { Toasts } from './Toasts.jsx';
 import { DIFFICULTY, MIN_WORD_LENGTH, ROWS } from '../game/constants.js';
 import { useBoardGeometry } from '../hooks/useBoardGeometry.js';
-import { findPath, pathToWord } from '../game/path.js';
+import { useNarrowViewport } from '../hooks/useNarrowViewport.js';
+import { findPath, isAdjacent, pathToWord } from '../game/path.js';
 import { wordBasePoints } from '../game/scoring.js';
 
-// Mobile viewport. The board is logically ROWS tall; on mobile we
-// render a bottom-anchored window that starts at MIN rows (when
-// columns are short) and **grows upward** to fit taller columns
-// plus BUFFER rows of planning space above the topmost tile. Row 9
-// (where new arrivals enter) is therefore always visible — the
-// bug-free invariant we get for free by anchoring the bottom rather
-// than sliding.
-//
-//   viewportRows = clamp(maxColHeight + BUFFER, MIN, ROWS)
-//   viewportTop  = ROWS - viewportRows
-//
-// Worked examples (MIN=5, BUFFER=2):
-//   maxHeight 0–3 → viewport 5 rows  (rows 5–9, game-start compact)
-//   maxHeight 4   → viewport 6 rows  (rows 4–9)
-//   maxHeight 5   → viewport 7 rows  (rows 3–9)
-//   maxHeight 6   → viewport 8 rows  (rows 2–9)
-//   maxHeight 7   → viewport 9 rows  (rows 1–9)
-//   maxHeight 8+  → viewport 10 rows (rows 0–9, full board)
-//
-// The card grows downward in the page flow as `viewportRows` climbs,
-// pushing the next-row preview lower. Acceptable: by the time the
-// growth happens the player is in late-game pressure mode and the
-// board is the only thing they're looking at.
-const MOBILE_VIEWPORT_MIN_ROWS = 5;
-const MOBILE_VIEWPORT_BUFFER = 2;
-const NARROW_BREAKPOINT_PX = 640;
+// Page layout note. The PlayScreen is **pinned to the viewport** on all
+// sizes — `h-[100dvh] overflow-hidden` on the outer wrapper — so there
+// is no full-page scrolling during gameplay. The Board always renders
+// the full ROWS-tall grid; the middle row of the flex column is
+// `overflow-y-auto`, so when the board is taller than the available
+// space (mobile) only a slice is visible and the player scrolls within
+// that slice. On desktop the board fits naturally and `overflow-y:auto`
+// is a no-op.
 
 // PlayScreen owns the *input* state for the round. There are two coexisting
 // input modes that share a single `selection` path:
@@ -98,26 +81,23 @@ export function PlayScreen({ game, dictionary }) {
     return dictionary.has(currentInput.toLowerCase());
   }, [canSubmit, dictionary, currentInput]);
 
-  // Viewport parameters for the Board. Logically the board is still
-  // ROWS tall (overflow check, gravity, path finding all use the full
-  // grid) — these props only control which slice of it is rendered.
-  //
-  //   Desktop:  viewportRows=ROWS, viewportTop=0  — show everything.
-  //   Mobile:   bottom-anchored, grows upward — see comment block
-  //             at the top of this file for the worked examples.
   const narrow = useNarrowViewport();
-  const { viewportRows, viewportTop } = useMemo(() => {
-    if (!narrow) return { viewportRows: ROWS, viewportTop: 0 };
-    const maxHeight = game.columns.reduce(
-      (acc, col) => Math.max(acc, col.length),
-      0,
-    );
-    const rows = Math.min(
-      ROWS,
-      Math.max(MOBILE_VIEWPORT_MIN_ROWS, maxHeight + MOBILE_VIEWPORT_BUFFER),
-    );
-    return { viewportRows: rows, viewportTop: ROWS - rows };
-  }, [narrow, game.columns]);
+
+  // Scrollable container that wraps the Board. On mobile the board is
+  // taller than this region, so the user scrolls within it; on desktop
+  // it fits and overflow-y:auto is a no-op. Auto-scroll-to-bottom on
+  // every row arrival (totalTiles increase) so the freshly-arrived row
+  // is visible without the player having to scroll manually.
+  const boardScrollRef = useRef(null);
+  const prevTotalTilesRef = useRef(0);
+  useEffect(() => {
+    const el = boardScrollRef.current;
+    if (!el) return;
+    if (game.totalTiles > prevTotalTilesRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }
+    prevTotalTilesRef.current = game.totalTiles;
+  }, [game.totalTiles]);
 
   // Live preview of the points this commit would award. Skips combo /
   // chain multipliers because they fire on the resulting clear, not on
@@ -141,11 +121,42 @@ export function PlayScreen({ game, dictionary }) {
     }
   }, [selection.length]);
 
-  // Grid mutated externally (clear / arrival) → any in-progress selection
-  // is now stale (tiles may have moved or vanished). Reset.
+  // Grid mutated externally (clear, gravity, row arrival). Try to
+  // *remap* the in-progress selection to the tiles' new positions
+  // rather than blowing it away. We look each selected id up in the
+  // current grid and:
+  //   - if any id is missing (tile cleared by a word commit, bomb,
+  //     etc.) → drop the whole selection;
+  //   - else if any consecutive pair in the remapped path is no
+  //     longer 8-adjacent (gravity rearranged columns under us) →
+  //     drop the selection (the path isn't realisable anymore);
+  //   - else → keep the selection with updated (row, col).
+  //
+  // For a pure row arrival every existing tile shifts up by exactly
+  // one row, so adjacency is preserved and the player keeps their
+  // in-progress tap-build.
   useEffect(() => {
-    setSelection([]);
-  }, [game.grid]);
+    setSelection((prev) => {
+      if (prev.length === 0) return prev;
+      const remapped = [];
+      for (const t of prev) {
+        const pos = findTilePos(game.columns, t.id);
+        if (!pos) return [];
+        remapped.push({ id: t.id, row: pos.row, col: pos.col });
+      }
+      for (let i = 0; i < remapped.length - 1; i++) {
+        if (!isAdjacent(remapped[i], remapped[i + 1])) return [];
+      }
+      // Skip the state update if nothing actually changed (the common
+      // case when grid.useMemo recomputes without column mutation).
+      const same =
+        remapped.length === prev.length &&
+        remapped.every(
+          (t, i) => t.row === prev[i].row && t.col === prev[i].col,
+        );
+      return same ? prev : remapped;
+    });
+  }, [game.columns]);
 
   // Bouncing out of the play phase clears everything.
   useEffect(() => {
@@ -283,12 +294,11 @@ export function PlayScreen({ game, dictionary }) {
   const cfg = DIFFICULTY[game.difficulty];
 
   return (
-    <div className="min-h-[100dvh] w-full px-2 py-2 sm:px-6 sm:py-6 sm:flex sm:flex-col">
-      {/* Page-level layout: on mobile we allow natural document flow so the
-          board can grow into a larger width-driven size and the page can
-          scroll vertically when needed. On desktop the flex-column with
-          flex-1 children keeps everything fit-to-viewport. */}
-      <div className="max-w-3xl mx-auto w-full flex flex-col gap-1.5 sm:flex-1 sm:min-h-0 sm:gap-5">
+    <div className="relative h-[100dvh] w-full overflow-hidden flex flex-col px-2 py-2 sm:px-6 sm:py-6">
+      {/* Pinned-to-viewport play surface. The outer wrapper is exactly
+          one viewport tall and clips overflow, so the page never
+          scrolls — only the middle board-scroll container does. */}
+      <div className="max-w-3xl mx-auto w-full flex flex-col flex-1 min-h-0 gap-1.5 sm:gap-5">
         {/* ============================================================
             MOBILE — three-column HUD: timer · score · stop.
             Grid layout so the score sits at the geometric *center*
@@ -425,36 +435,38 @@ export function PlayScreen({ game, dictionary }) {
           </div>
         </div>
 
-        {/* Board area. On desktop the lifelines float as a vertical
-            sidecar to the right of the board; on mobile the lifelines
-            live in the top action bar so the board takes the full
-            horizontal slot here. */}
+        {/* Board scroll region. flex-1 so it takes all remaining vertical
+            space between the (pinned) HUD/word display above and the
+            (pinned) control strip / progress / next-row below.
+            `overflow-y-auto` scrolls when content (the full 10-row
+            board) is taller than the region — i.e. mobile. Desktop
+            content fits and this is a no-op.
+            `overscroll-contain` keeps the page from bouncing /
+            triggering pull-to-refresh outside this region. */}
         <div
-          ref={boardAreaRef}
-          className="flex min-w-0 items-center justify-center py-1 sm:min-h-[200px] sm:flex-1"
+          ref={(node) => {
+            boardAreaRef.current = node;
+            boardScrollRef.current = node;
+          }}
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex items-start sm:items-center justify-center py-1 sm:min-h-[200px]"
         >
-          <div className="relative sm:inline-block">
-            <div className="relative inline-block">
-              <Board
-                geometry={boardGeometry}
-                grid={game.grid}
-                columns={game.columns}
-                viewportRows={viewportRows}
-                topRow={viewportTop}
-                selection={selection}
-                selectedIds={selectedIds}
-                clearingIds={game.clearingIds}
-                explodingIds={game.explodingIds}
-                scramblingIds={game.scramblingIds}
-                danger={game.danger}
-                shakeKey={game.shakeKey}
-                hardShakeKey={game.hardShakeKey}
-                redFlashKey={game.redFlashKey}
-                onSelectionChange={setSelection}
-                onCommit={commitSelection}
-              />
-              <Toasts toasts={game.toasts} />
-            </div>
+          <div className="relative inline-block">
+            <Board
+              geometry={boardGeometry}
+              grid={game.grid}
+              columns={game.columns}
+              selection={selection}
+              selectedIds={selectedIds}
+              clearingIds={game.clearingIds}
+              explodingIds={game.explodingIds}
+              scramblingIds={game.scramblingIds}
+              danger={game.danger}
+              shakeKey={game.shakeKey}
+              hardShakeKey={game.hardShakeKey}
+              redFlashKey={game.redFlashKey}
+              onSelectionChange={setSelection}
+              onCommit={commitSelection}
+            />
             {/* Desktop sidecar lifelines only — mobile renders them in
                 a dedicated control row below the board (see below). */}
             <div className="hidden sm:absolute sm:top-1/2 sm:left-full sm:ml-4 sm:flex sm:-translate-y-1/2">
@@ -557,28 +569,30 @@ export function PlayScreen({ game, dictionary }) {
           </div>
         </div>
       </div>
+
+      {/* Toasts overlay — sits OUTSIDE the board scroll region so it
+          stays anchored to the viewport even as the player scrolls.
+          Centered over the play surface. */}
+      <Toasts toasts={game.toasts} />
     </div>
   );
 }
 
-// Tracks whether the viewport is in the "narrow" (mobile) regime —
-// kept in sync with a `matchMedia` listener so a rotation or window
-// resize re-renders the play screen and switches the board between
-// the desktop full-board layout and the mobile sliding viewport.
-function useNarrowViewport() {
-  const [narrow, setNarrow] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.innerWidth < NARROW_BREAKPOINT_PX;
-  });
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const mq = window.matchMedia(`(max-width: ${NARROW_BREAKPOINT_PX - 1}px)`);
-    const update = () => setNarrow(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-  return narrow;
+// Locate a tile's current (row, col) in the per-column stacks by its
+// stable id, or null if the tile no longer exists on the board. Used
+// by PlayScreen to remap an in-progress tap selection through row
+// arrivals and gravity. Indices in `columns[c]` are bottom-up, so the
+// derived row is `ROWS - 1 - i`.
+function findTilePos(columns, id) {
+  for (let c = 0; c < columns.length; c++) {
+    const stack = columns[c];
+    for (let i = 0; i < stack.length; i++) {
+      if (stack[i].id === id) {
+        return { row: ROWS - 1 - i, col: c };
+      }
+    }
+  }
+  return null;
 }
 
 // Countdown for the "Next Row" label. Shows whole seconds when ≥ 3, one

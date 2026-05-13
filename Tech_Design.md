@@ -132,74 +132,49 @@ Tile size is responsive (`useBoardGeometry`):
   tradeoff is large tappable tiles. Floating lifeline + ✓ FABs sit
   in the bottom corners of the board card (see §5).
 
-### Mobile bottom-anchored growing viewport
+### Mobile layout: pinned viewport, scrollable board
 
-The board is **logically** always `ROWS=10` tall — gravity, overflow
-detection, path finding, scoring all use the full grid. On mobile
-we render a **bottom-anchored** viewport that **grows upward** as
-columns get tall, instead of a fixed-size window that slides.
+The PlayScreen is **pinned to the viewport** at all sizes —
+`h-[100dvh] overflow-hidden flex flex-col` on the outer wrapper. The
+page never scrolls during gameplay. The middle flex child (`flex-1
+min-h-0 overflow-y-auto overscroll-contain`) wraps the Board: when
+the board is taller than the available space (mobile, where the full
+10-row board is ~700 px and the available slice is ~500 px), this
+container scrolls internally; on desktop the board fits naturally
+and `overflow-y:auto` is a no-op.
 
-```
-MOBILE_VIEWPORT_MIN_ROWS = 5
-MOBILE_VIEWPORT_BUFFER   = 2  // empty rows above topmost tile
+**Auto-scroll on row arrival.** A `useEffect` watches
+`game.totalTiles` via a `prevTotalTilesRef`. When the count
+increases (a row arrived; clears decrease it, scrambles don't change
+it) the container smoothly scrolls to its bottom so the
+freshly-arrived row is visible without manual scrolling.
 
-viewportRows = clamp(maxColHeight + 2, 5, 10)
-viewportTop  = ROWS - viewportRows
-```
+**Touch model.**
 
-Worked examples:
+| Surface | `touch-action` | Behavior |
+| --- | --- | --- |
+| Outer wrapper | (default `auto`) | n/a — outer is `overflow: hidden`, can't scroll |
+| Board-scroll container | (default `auto`) | Browser pans vertically when the touch starts on a non-tile region |
+| Tile elements | `none` | Browser hands the entire gesture to JS — drag-select works in any direction without competing with scroll |
+| Empty-cell placeholders | (default `auto`) | Pan up into the scroll container |
 
-| max col height | viewport rows | visible rows | buffer above topmost |
-| --- | --- | --- | --- |
-| 0–3 | 5  | **5–9** | 2+ (game-start compact) |
-| 4   | 6  | **4–9** | 2 |
-| 5   | 7  | **3–9** | 2 |
-| 6   | 8  | **2–9** | 2 |
-| 7   | 9  | **1–9** | 2 |
-| 8+  | 10 | **0–9** | shrinks as overflow approaches |
+A drag that begins on a tile is committed to "JS-handled" by the
+browser the moment it sees `touch-action: none`, so the player can
+move the finger in any direction (vertical too — `EYE`, `OUT`)
+without the board accidentally scrolling. A touch that begins on an
+empty cell scrolls the board. With a fully-populated board the only
+scrolling lever is the auto-scroll, but late-game gameplay is
+focused on the bottom anyway.
 
-**Bottom row 9 is always visible** — the row where new tiles
-arrive can never clip. This replaced an earlier fixed-7-row
-sliding-window design where the slide-up (e.g. 3–9 → 2–8 at
-maxHeight 5) made the just-arrived tile at row 9 mount below the
-new `visibleInnerHeight` and get clipped, producing a "the timer
-finished but no row rose up" symptom.
-
-Desktop is unchanged: `viewportRows=ROWS, viewportTop=0` — the
-full board is always rendered because the desktop layout fits
-naturally.
-
-`Board.jsx` implements the viewport via:
-- Container height = `viewportRows * cellStride - tileGap` (with CSS
-  `transition` so the height animates as the window grows).
-- All tiles use a `yOffset = viewportTop * cellStride` subtracted
-  from their `row * cellStride` y position so the topmost-visible
-  row always sits at y=0 in container coordinates.
-- Empty-cell placeholders render only for the visible row range
-  `[viewportTop, viewportTop + viewportRows - 1]`.
-- `pickTile` adds `yOffset` back to the local pointer y, **and**
-  rejects taps/drags that fall outside the visible viewport so
-  pointer-capture can't pick a tile that's clipped off-screen.
-- The board card wraps with `overflow: hidden` so tiles outside
-  the viewport (and freshly-mounted tiles entering from below)
-  are clipped to the card chrome.
-
-Internal logical row numbers (`row = ROWS - 1 - i` in the column
-stack) and the `grid[row][col]` derived view are unchanged — every
-gameplay code path operates on the full 10-row grid.
+The board card itself still uses `overflow: hidden` — it clips the
+freshly-mounted tile that enters from `renderRow = ROWS` (below the
+inner container) so the entry animation doesn't leak below the
+card's bottom edge.
 
 Narrow-viewport detection is a small `useNarrowViewport` hook in
-`PlayScreen.jsx` that mirrors a `matchMedia('(max-width: 639px)')`
-listener, so orientation changes / window resizes switch the board
-between full-render and growing-viewport modes live.
-
-**Tradeoff acknowledged.** The card grows downward in the page flow
-as `viewportRows` climbs from 7 to 10, pushing the next-row preview
-lower. By the time the growth happens the player is in late-game
-pressure mode and the board is the only thing they're looking at —
-acceptable. The alternative (fixed compact viewport that slides
-to expose the dangerous top) hides row 9 by construction, which
-the player perceives as a bug.
+`src/hooks/useNarrowViewport.js` that mirrors a
+`matchMedia('(max-width: 639px)')` listener — shared with
+GameOverScreen for its collapsible-default behavior.
 
 Game seeds **3 rows** at start (`INITIAL_ROWS = 3`) so the player
 has real planning context from turn 0 and the playability scorer's
@@ -273,11 +248,18 @@ from each pool:
   35% from `COMMON_HIGH = RSTLN`, 40% from `COMMON_MID = DHCMPG`
   (letters that form glue patterns like TH, SH, CH, CR, CL, PR, PL,
   GR, MP, ND), 25% from `COMMON_OTHER = BFKVWY` (long tail).
-- Shuffle.
+- **Place vowels at non-adjacent slot positions.** Instead of a pure
+  random shuffle, `placeAvoidingAdjacentVowels` enumerates the
+  position sets of size `vowelCount` over 5 slots where no two chosen
+  indices are consecutive (6 sets for 2-vowel rows; the single
+  `{0,2,4}` set for 3-vowel rows), picks one uniformly, drops the
+  vowels in, and fills the rest with consonants. **No new row ever
+  has two horizontally-adjacent vowels.** Verified by 5000-row smoke
+  test: 0% horizontal adjacency.
 
 Hard guarantees: all 5 letters distinct, 2–3 vowels, ≤ 1 rare,
-≥ 1 R/S/T/L/N anchor. No retries, no patchers — every roll is
-structurally valid.
+≥ 1 R/S/T/L/N anchor, **no horizontally-adjacent vowels within a
+row**. No retries, no patchers — every roll is structurally valid.
 
 **2. Playability scoring (`rollPlayableRow`)**
 
@@ -316,7 +298,16 @@ unrelated tiles, leaving the player with a dead adjacency graph.
 +35 per distinct length-5 word
 +5  if the word's path includes any new-row tile
 +5  if the word's path includes any tile in the topmost occupied row
+-5  per 8-adjacent vowel-vowel pair on the resulting grid
 ```
+
+The vowel-adjacency penalty handles the *cross-row* clusters that
+the in-row constructive placement can't address: when a new vowel
+would land on top of (or diagonally next to) an existing vowel, the
+penalty makes the candidate score worse, so `rollPlayableRow` —
+which already takes the best of 20 candidates — tends to pick
+arrivals that disperse vowels across columns rather than stacking
+them.
 
 **Per-difficulty thresholds** (`DIFFICULTY[d].quality`):
 
@@ -817,6 +808,104 @@ rather than overcounting via Scrabble-tournament short words.
 ---
 
 ## 10. Change log
+
+- **2026-05-12 — Pin layout + scrollable board.**
+  - **No more full-page scroll.** PlayScreen outer wrapper is now
+    `h-[100dvh] overflow-hidden flex flex-col`; the page stays
+    locked to the viewport during gameplay regardless of column
+    height. Resolves Safari/iOS address-bar reflow and page-pull
+    issues.
+  - **Board scrolls internally.** The middle flex child is
+    `flex-1 min-h-0 overflow-y-auto overscroll-contain`; when the
+    full 10-row Board is taller than this region (mobile) the
+    container scrolls. Desktop layouts fit naturally and the
+    overflow-y rule is a no-op.
+  - **Board.jsx simplified.** Removed the viewport-cropping logic
+    (`viewportRows`, `topRow`, `yOffset`, height transition, etc.).
+    Board always renders the full ROWS-tall inner container. Card
+    `overflow: hidden` still clips the entry animation. ~50 lines
+    of state lighter.
+  - **Auto-scroll on row arrival.** `useEffect` watches
+    `game.totalTiles` via a ref; on increase (a row arrived; clears
+    decrease it, scrambles don't change it) the container smoothly
+    scrolls to its bottom so the new row is visible without
+    manual scrolling.
+  - **Touch model.** Tiles keep `touch-action: none` so drag-select
+    in any direction (including vertical for `EYE`-style words)
+    doesn't compete with browser pan. Empty cells / placeholders /
+    gaps default to `auto`, so a touch that begins on a non-tile
+    region pans the scroll container.
+  - **Toasts hoisted out.** Toasts now render at the
+    PlayScreen outer level, so a `+points` / `COMBO x3` overlay
+    stays anchored to the viewport even while the board scrolls.
+
+- **2026-05-12 — Polish: Best-word overflow, selection persistence, selected-tile bleed.**
+  - **GameOverScreen — Best Word font tiers.** Replaced the
+    single-breakpoint font tier (`>4 chars`) with a length-based
+    ladder: 4 chars → 3xl, 5–6 → xl, 7–8 → lg, 9+ → base. Added
+    `truncate` + `title` as a safety net. Closes the
+    "HOLLYWOOD overflows its tile" report.
+  - **PlayScreen — selection persists across row arrivals.** The
+    `useEffect` that watched `game.grid` used to blow the selection
+    away on every column mutation. Replaced with a remap: look each
+    selected id up by `findTilePos`, take its new (row, col); drop
+    the whole selection only if any id is missing (cleared) OR if
+    any consecutive pair is no longer 8-adjacent (gravity broke
+    the path). For pure row arrivals every existing tile shifts up
+    by one row, so adjacency is preserved and the player's
+    in-progress tap-build survives.
+  - **Board — selected tiles no longer scale.** Removed
+    `scale-[1.05]` from the selected-tile className. Replaced with
+    a slightly stronger drop shadow (`shadow-xl` + heavier color)
+    so the visual feedback is still unmissable. Fixes selected
+    tiles in any row visually bleeding into the row below.
+
+- **2026-05-12 — Restructure GameOverScreen for mobile.**
+  - **Information hierarchy.** Top → bottom is now: outcome
+    (GAME OVER + score) → 3 stat tiles → small celebratory callout →
+    save flow (when relevant) → primary CTA (Play Again) → secondary
+    CTA (Main Menu) → collapsible Leaderboard → collapsible Words
+    Found. Replay button is now above the fold on common phone
+    viewports without scrolling.
+  - **Third stat tile is now Rank, not NEW.** Quantitative ("#4"),
+    consistent with the other two tiles, and emotionally consequential
+    — gives the run identity. New `computeRank` helper reads
+    `leaderboard.entries` (preferring `submittedEntry` post-save) and
+    returns the player's position, with "—" for loading / error /
+    outside-top-10.
+  - **"New Personal Best" badge.** Small inline chip below the stat
+    tiles (when `isHighScore`) instead of consuming a full tile.
+  - **Collapsible sections.** `<CollapsibleSection>` wraps both the
+    Leaderboard and the Words Found list. `defaultOpen` is `!narrow`
+    via the new shared `useNarrowViewport` hook — open on desktop,
+    collapsed on mobile so the replay CTA stays above the fold.
+  - **Shared `useNarrowViewport` hook.** Extracted from PlayScreen
+    into `src/hooks/useNarrowViewport.js` so both screens share a
+    single matchMedia listener for the 640 px breakpoint.
+
+- **2026-05-12 — Reduce adjacent vowels.**
+  - **Symptom.** Player feedback after many rounds: too many
+    adjacent vowels, both within rows and stacked vertically.
+  - **Root cause.** `rollRow` ended in a uniform shuffle of all 5
+    slot letters, so the only no-adjacent-vowel arrangement for a
+    3-vowel row (`VCVCV`) had ~10% probability. Cross-row stacking
+    was unconstrained — `scoreBoard` only counted words, so a
+    candidate with vowels piled directly on top of an existing
+    vowel column scored the same as one with vowels dispersed.
+  - **Fix part 1 — constructive placement.** Replaced the row-end
+    shuffle with `placeAvoidingAdjacentVowels`: enumerate the
+    position sets where vowels are non-adjacent (6 sets for
+    2-vowel rows, `{0,2,4}` for 3-vowel rows), pick one uniformly,
+    drop vowels in, fill consonants around them. **Horizontal
+    vowel adjacency on new rows is now 0%** (verified by a
+    5000-row smoke test).
+  - **Fix part 2 — `scoreBoard` penalty.** Added a
+    `VOWEL_ADJACENCY_PENALTY = 5` per 8-adjacent vowel-vowel pair
+    on the simulated post-arrival grid. Steers
+    `rollPlayableRow`'s best-of-20 candidate selection toward
+    arrivals that disperse vowels across columns rather than
+    stacking them — the only thing the in-row constructive
+    placement can't address.
 
 - **2026-05-12 — Add Scramble lifeline.**
   - **Third lifeline button** with the Lucide-style Shuffle icon
