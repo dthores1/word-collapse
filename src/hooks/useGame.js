@@ -10,9 +10,13 @@ import {
   LIFELINE_REGEN_EVERY_WORDS,
   MIN_WORD_LENGTH,
   ROWS,
+  SCRAMBLE_INITIAL_USES,
+  SCRAMBLE_MAX,
+  SCRAMBLE_MUTATE_DELAY,
+  SCRAMBLE_REGEN_EVERY_WORDS,
 } from '../game/constants.js';
 import { rollPlayableRow } from '../game/letters.js';
-import { bombTargetIds, computeCollapse } from '../game/lifelines.js';
+import { bombTargetIds, computeCollapse, scrambleColumns } from '../game/lifelines.js';
 import { awardPoints } from '../game/scoring.js';
 
 // =====================================================================
@@ -76,6 +80,13 @@ const initialState = {
   // Tile ids currently animating with the bomb explosion class. Distinct
   // from `clearingIds` so we can play a heavier flash effect.
   explodingIds: new Set(),
+  // Scramble lifeline. Player starts with 0, earns one every
+  // SCRAMBLE_REGEN_EVERY_WORDS clears (capped at SCRAMBLE_MAX). Tile ids
+  // mid-scramble animation live in scramblingIds so the Board can both
+  // play the lift/jitter keyframe and refuse pointer input while the
+  // shuffle is in flight.
+  scrambleUses: SCRAMBLE_INITIAL_USES,
+  scramblingIds: new Set(),
 };
 
 function emptyColumns() {
@@ -128,6 +139,7 @@ function reducer(state, action) {
       return {
         ...initialState,
         dictionary: state.dictionary,
+        commonDict: state.commonDict,
         phase: 'playing',
         difficulty,
         columns,
@@ -138,6 +150,7 @@ function reducer(state, action) {
         elapsedMs: 0,
         bombUses: LIFELINE_INITIAL_USES,
         collapseUses: LIFELINE_INITIAL_USES,
+        scrambleUses: SCRAMBLE_INITIAL_USES,
       };
     }
 
@@ -221,6 +234,17 @@ function reducer(state, action) {
         wordsNext > 0 && wordsNext % LIFELINE_REGEN_EVERY_WORDS === 0 ? 1 : 0;
       const bombUsesNext = Math.min(LIFELINE_MAX, state.bombUses + regen);
       const collapseUsesNext = Math.min(LIFELINE_MAX, state.collapseUses + regen);
+      // Scramble is rarer — every SCRAMBLE_REGEN_EVERY_WORDS cleared
+      // words, attempt to award a charge. If already at cap the award
+      // is silently dropped (player can't stockpile multiple).
+      const scrambleRegen =
+        wordsNext > 0 && wordsNext % SCRAMBLE_REGEN_EVERY_WORDS === 0 ? 1 : 0;
+      const scrambleUsesNext = Math.min(
+        SCRAMBLE_MAX,
+        state.scrambleUses + scrambleRegen,
+      );
+      const scrambleAwarded =
+        scrambleRegen > 0 && scrambleUsesNext > state.scrambleUses;
 
       const toasts = [
         ...state.toasts,
@@ -255,6 +279,14 @@ function reducer(state, action) {
           expiresAt: action.now + 1300,
         });
       }
+      if (scrambleAwarded) {
+        toasts.push({
+          id: `t${action.now}-s`,
+          text: 'SCRAMBLE +1',
+          kind: 'combo',
+          expiresAt: action.now + 1500,
+        });
+      }
 
       return {
         ...state,
@@ -270,6 +302,7 @@ function reducer(state, action) {
         rowInterval: newRowInterval,
         bombUses: bombUsesNext,
         collapseUses: collapseUsesNext,
+        scrambleUses: scrambleUsesNext,
         toasts,
       };
     }
@@ -312,6 +345,36 @@ function reducer(state, action) {
 
     case 'INVALID': {
       return { ...state, shakeKey: state.shakeKey + 1 };
+    }
+
+    case 'SCRAMBLE_START': {
+      // Reject if no charge, no tiles to shuffle, or already scrambling.
+      if (state.scrambleUses <= 0) return state;
+      if (state.scramblingIds.size > 0) return state;
+      const tileIds = [];
+      for (const col of state.columns) for (const t of col) tileIds.push(t.id);
+      if (tileIds.length < 2) return state;
+      return {
+        ...state,
+        scrambleUses: state.scrambleUses - 1,
+        scramblingIds: new Set(tileIds),
+      };
+    }
+
+    case 'SCRAMBLE_DO': {
+      // Apply the shuffle to columns. Tile ids travel with their
+      // tiles, so React keeps the same DOM nodes and the existing
+      // transform transition handles the slide animation.
+      const { columns, changed } = scrambleColumns(
+        state.columns,
+        state.commonDict || state.dictionary,
+      );
+      if (!changed) return state;
+      return { ...state, columns };
+    }
+
+    case 'SCRAMBLE_END': {
+      return { ...state, scramblingIds: new Set() };
     }
 
     case 'ARRIVE_ROW': {
@@ -472,6 +535,28 @@ export function useGame(dictionary, commonDict) {
     return true;
   }, [state.collapseUses]);
 
+  // SCRAMBLE: three-phase lifeline.
+  //   1. SCRAMBLE_START (now)   — mark all tile ids as scrambling so the
+  //      Board renders them with the lift/jitter keyframe AND blocks
+  //      pointer input.
+  //   2. SCRAMBLE_DO  (+180ms)  — actually reshuffle the columns; tiles
+  //      glide to new positions via the existing transform transition.
+  //   3. SCRAMBLE_END (+700ms)  — clear scramblingIds (animation done).
+  const useScramble = useCallback(() => {
+    if (state.scrambleUses <= 0) return false;
+    if (state.scramblingIds.size > 0) return false;
+    const total = state.columns.reduce((acc, col) => acc + col.length, 0);
+    if (total < 2) return false;
+    dispatch({ type: 'SCRAMBLE_START' });
+    setTimeout(() => {
+      dispatch({ type: 'SCRAMBLE_DO' });
+    }, SCRAMBLE_MUTATE_DELAY);
+    setTimeout(() => {
+      dispatch({ type: 'SCRAMBLE_END' });
+    }, ANIM.tileScramble);
+    return true;
+  }, [state.scrambleUses, state.scramblingIds, state.columns]);
+
   // Submits a path that already maps to letters. Returns true if accepted.
   // Validation: minimum length, dictionary membership.
   const submitPath = useCallback(
@@ -519,8 +604,10 @@ export function useGame(dictionary, commonDict) {
     bestWord: state.bestWord,
     clearingIds: state.clearingIds,
     explodingIds: state.explodingIds,
+    scramblingIds: state.scramblingIds,
     bombUses: state.bombUses,
     collapseUses: state.collapseUses,
+    scrambleUses: state.scrambleUses,
     toasts: state.toasts,
     shakeKey: state.shakeKey,
     hardShakeKey: state.hardShakeKey,
@@ -537,5 +624,6 @@ export function useGame(dictionary, commonDict) {
     submitPath,
     useBomb,
     useCollapse,
+    useScramble,
   };
 }

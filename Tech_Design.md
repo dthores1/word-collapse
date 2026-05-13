@@ -122,14 +122,84 @@ live at rows `0..(9 - stack.length)`.
 Tile size is responsive (`useBoardGeometry`):
 
 - **Desktop** (`availW ≥ 640`) — tiles fit-to-viewport, sized as
-  `min(widthFit, heightFit, MAX_TILE_SIZE=46)`. The play UI tries
-  hard to stay within one viewport so nothing scrolls during a round.
+  `min(widthFit, heightFit, MAX_TILE_SIZE=46)`. Board frame padding
+  is `BOARD_FRAME_PADDING=28`. The play UI tries hard to stay within
+  one viewport so nothing scrolls during a round.
 - **Mobile / narrow** (`availW < 640`) — tiles are sized by **width
-  only**, capped at `NARROW_MAX_TILE_SIZE=64`. The 10-row board at
-  width-fit sizes is taller than a typical phone viewport, so the
-  page is allowed to scroll vertically — the tradeoff is large
-  tappable tiles. Horizontal lifelines below the board keep the
-  vertical overhead modest.
+  only**, capped at `NARROW_MAX_TILE_SIZE=64`. Frame padding drops
+  to `NARROW_BOARD_FRAME_PADDING=12` so the board runs nearly
+  edge-to-edge. The page is allowed to scroll vertically — the
+  tradeoff is large tappable tiles. Floating lifeline + ✓ FABs sit
+  in the bottom corners of the board card (see §5).
+
+### Mobile bottom-anchored growing viewport
+
+The board is **logically** always `ROWS=10` tall — gravity, overflow
+detection, path finding, scoring all use the full grid. On mobile
+we render a **bottom-anchored** viewport that **grows upward** as
+columns get tall, instead of a fixed-size window that slides.
+
+```
+MOBILE_VIEWPORT_MIN_ROWS = 5
+MOBILE_VIEWPORT_BUFFER   = 2  // empty rows above topmost tile
+
+viewportRows = clamp(maxColHeight + 2, 5, 10)
+viewportTop  = ROWS - viewportRows
+```
+
+Worked examples:
+
+| max col height | viewport rows | visible rows | buffer above topmost |
+| --- | --- | --- | --- |
+| 0–3 | 5  | **5–9** | 2+ (game-start compact) |
+| 4   | 6  | **4–9** | 2 |
+| 5   | 7  | **3–9** | 2 |
+| 6   | 8  | **2–9** | 2 |
+| 7   | 9  | **1–9** | 2 |
+| 8+  | 10 | **0–9** | shrinks as overflow approaches |
+
+**Bottom row 9 is always visible** — the row where new tiles
+arrive can never clip. This replaced an earlier fixed-7-row
+sliding-window design where the slide-up (e.g. 3–9 → 2–8 at
+maxHeight 5) made the just-arrived tile at row 9 mount below the
+new `visibleInnerHeight` and get clipped, producing a "the timer
+finished but no row rose up" symptom.
+
+Desktop is unchanged: `viewportRows=ROWS, viewportTop=0` — the
+full board is always rendered because the desktop layout fits
+naturally.
+
+`Board.jsx` implements the viewport via:
+- Container height = `viewportRows * cellStride - tileGap` (with CSS
+  `transition` so the height animates as the window grows).
+- All tiles use a `yOffset = viewportTop * cellStride` subtracted
+  from their `row * cellStride` y position so the topmost-visible
+  row always sits at y=0 in container coordinates.
+- Empty-cell placeholders render only for the visible row range
+  `[viewportTop, viewportTop + viewportRows - 1]`.
+- `pickTile` adds `yOffset` back to the local pointer y, **and**
+  rejects taps/drags that fall outside the visible viewport so
+  pointer-capture can't pick a tile that's clipped off-screen.
+- The board card wraps with `overflow: hidden` so tiles outside
+  the viewport (and freshly-mounted tiles entering from below)
+  are clipped to the card chrome.
+
+Internal logical row numbers (`row = ROWS - 1 - i` in the column
+stack) and the `grid[row][col]` derived view are unchanged — every
+gameplay code path operates on the full 10-row grid.
+
+Narrow-viewport detection is a small `useNarrowViewport` hook in
+`PlayScreen.jsx` that mirrors a `matchMedia('(max-width: 639px)')`
+listener, so orientation changes / window resizes switch the board
+between full-render and growing-viewport modes live.
+
+**Tradeoff acknowledged.** The card grows downward in the page flow
+as `viewportRows` climbs from 7 to 10, pushing the next-row preview
+lower. By the time the growth happens the player is in late-game
+pressure mode and the board is the only thing they're looking at —
+acceptable. The alternative (fixed compact viewport that slides
+to expose the dangerous top) hides row 9 by construction, which
+the player perceives as a bug.
 
 Game seeds **3 rows** at start (`INITIAL_ROWS = 3`) so the player
 has real planning context from turn 0 and the playability scorer's
@@ -372,20 +442,23 @@ defer is invisible because clear animations finish in ~150ms.
 
 ## 4½. Lifelines
 
-Two single-purpose actions the player can spend to relieve pressure.
-Constants live in `constants.js`:
+Three single-purpose actions the player can spend to relieve pressure
+or recover opportunity. Constants live in `constants.js`:
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
-| `LIFELINE_INITIAL_USES` | 2 | Starting count for each lifeline at game start |
-| `LIFELINE_MAX` | 3 | Cap on accumulated uses |
-| `LIFELINE_REGEN_EVERY_WORDS` | 8 | Each `N`-th cleared word grants +1 to **each** lifeline |
+| `LIFELINE_INITIAL_USES` | 2 | Starting count for Bomb / Collapse at game start |
+| `LIFELINE_MAX` | 3 | Cap on accumulated Bomb / Collapse uses |
+| `LIFELINE_REGEN_EVERY_WORDS` | 8 | Each `N`-th cleared word grants +1 to **each** of Bomb / Collapse |
+| `SCRAMBLE_INITIAL_USES` | 1 | Player starts with one Scramble charge so the mechanic is discoverable from round 1 |
+| `SCRAMBLE_MAX` | 1 | Cap on held Scramble charges |
+| `SCRAMBLE_REGEN_EVERY_WORDS` | 15 | Each `N`-th cleared word *attempts* to award a Scramble charge (silently dropped if already at cap) |
 
-Both are tracked on reducer state (`bombUses`, `collapseUses`).
+State is tracked as `bombUses`, `collapseUses`, `scrambleUses`.
 `CLEAR_END` (the action that finalises a successful word) is also the
-regen tick — when `wordsCount` becomes a multiple of
-`LIFELINE_REGEN_EVERY_WORDS`, both lifelines get +1 (capped) and a
-`LIFELINE +1` toast is queued.
+regen tick — when `wordsCount` becomes a multiple of the respective
+regen interval, the corresponding lifeline gets +1 (capped) and a
+`LIFELINE +1` / `SCRAMBLE +1` toast is queued.
 
 ### Bomb (`useBomb`)
 
@@ -430,6 +503,44 @@ Worked example for the canonical case (heights `[5, 2, 2, 2, 5]`,
 0 and 4 (3 spilled total) land atop cols 1, 2, 3 in left-to-right
 order. Bottom rows of every column stay put.
 
+### Scramble (`useScramble`)
+
+Algorithm (`game/lifelines.js → scrambleColumns`): flatten all tile
+objects via `columns.flat()`, Fisher-Yates shuffle, repack into
+columns preserving each column's original height. Tile *ids* travel
+with their letters, so the React keys stay stable — the existing
+transform transition on each tile drives the visible slide from old
+to new positions.
+
+A light dictionary-aware quality bias runs `SCRAMBLE_ATTEMPTS=8`
+shuffles, scores each candidate's resulting grid with the existing
+`scoreBoard` from `letters.js`, and picks the candidate whose grid
+has the highest score (i.e. the most distinct dictionary words
+formable on the new adjacency graph). Nudges the result toward
+playable boards without being deterministic.
+
+Reducer flow is **three phases** so the visible movement reads as
+lift → shuffle → settle:
+
+1. `SCRAMBLE_START` (now): marks every current tile id in
+   `scramblingIds` and decrements `scrambleUses`. The Board renders
+   matching tiles with `.animate-tile-scramble` (lift + jitter
+   keyframe on the modern `scale` / `rotate` CSS properties so they
+   don't fight the inline `transform: translate(...)`) and refuses
+   pointer input while the set is non-empty.
+2. `SCRAMBLE_DO` (now + `SCRAMBLE_MUTATE_DELAY = 180 ms`): applies
+   the shuffled columns. Tiles slide to new positions via the
+   existing 200 ms transform transition, overlapping the back half
+   of the keyframe so the motion feels chaotic rather than
+   sequential.
+3. `SCRAMBLE_END` (now + `ANIM.tileScramble = 700 ms`): clears
+   `scramblingIds`, restoring pointer input.
+
+No score, no combo, no rowInterval change, no effect on the
+upcoming queued row — Scramble is purely an "opportunity recovery"
+mechanic. Tile count and per-column heights are preserved, so
+danger level isn't directly reduced.
+
 ## 5. Input
 
 `PlayScreen.jsx` owns the canonical `selection` state (the path of
@@ -459,16 +570,25 @@ Three input flows feed the same selection:
   (`window.innerWidth < 640`) the entire input card is `hidden` and
   the auto-focus useEffect short-circuits, so the on-screen keyboard
   never appears. Mobile players have no word display at all — the
-  selection is conveyed by tile highlight + connecting line, and the
-  ✓ FAB on the board's bottom-right corner serves as both submit and
-  live validity cue (see Submit button below).
+  selection is conveyed by tile highlight + connecting line, and
+  the ✓ button in the mobile control strip below the board serves
+  as both submit and live validity cue (see Submit button below).
+  - A window-level `keydown` listener (active only during
+    `phase === 'playing'` and skipped when the `<input>` itself is
+    focused, to avoid double-firing) catches the same keys
+    everywhere else: any single letter focuses the input + injects
+    the char; `Enter` submits via the same `handleEnter`;
+    `Backspace` pops the last selected tile (or last typed char if
+    there's no tile selection); `Escape` clears both. Enter and
+    Backspace fall through to the focused element when nothing is
+    selected/typed so a focused lifeline button can still be
+    activated by the keyboard.
 - **Submit button (✓)** — two placements share the same
   `SubmitButton` component with a `large` prop:
     - **Desktop** — small 36×36 button inside the input card on the
       right.
-    - **Mobile** — large 56×56 FAB anchored to the board's
-      bottom-right corner (`absolute -bottom-3 -right-3 z-10`),
-      rendered as a sibling of `<Board>`.
+    - **Mobile** — large 56×56 button in the mobile control strip
+      *below* the board (right side of the strip).
   Three visual states (both placements): disabled grey when length <
   3 or no realisable path; primary navy when length ≥ 3 but the word
   isn't in ENABLE (clickable, will trigger the shake reject); success
@@ -476,6 +596,23 @@ Three input flows feed the same selection:
   desktop, paired with a one-shot session hint that surfaces the
   first time a tap-built selection reaches 3 letters — the hint is
   omitted on mobile since the FAB itself is unmissable.
+- **Mobile floating word display** — between the HUD and the board,
+  a slim 36-px-tall band shows `currentInput` in large translucent
+  navy when a selection or typed string is active, plus a `+N` base
+  score in success-green when the word is in ENABLE. Fades opacity
+  in/out, no layout shift. Combo / chain multipliers are not shown
+  — they're path-independent multipliers awarded on the resulting
+  clear, so the base score is what makes word-length tradeoffs
+  legible at the decision point.
+- **Mobile control strip** — between the board and the progress bar
+  sits a single row holding `[BOMB] [COLLAPSE] ............ [✓]`
+  (`flex justify-between`). All three buttons are 56×56 so the touch
+  targets read as gameplay abilities. Critically, **no controls
+  overlap the board area** — the board is a pure interaction
+  surface, so drag-select tracing never risks an accidental tap on
+  a lifeline. Compact `LifelinePanel` was bumped from 40 → 56 px
+  to match the ✓ size; the desktop vertical sidecar variant on the
+  right of the board is unchanged.
 
 Mode-switch rules:
 
@@ -680,6 +817,181 @@ rather than overcounting via Scrabble-tournament short words.
 ---
 
 ## 10. Change log
+
+- **2026-05-12 — Add Scramble lifeline.**
+  - **Third lifeline button** with the Lucide-style Shuffle icon
+    and a new amber `warn` tone. Renders alongside Bomb / Collapse
+    in both the mobile control strip and the desktop sidecar.
+  - **Earning curve.** Player starts at 1 charge so the mechanic
+    is discoverable from round 1; recharges +1 every
+    `SCRAMBLE_REGEN_EVERY_WORDS = 15` cleared words, capped at
+    `SCRAMBLE_MAX = 1`. Awards above the cap are silently dropped
+    so a stockpiled charge feels rare and valuable. New
+    `SCRAMBLE +1` toast on each successful recharge.
+  - **Algorithm.** `game/lifelines.js → scrambleColumns`:
+    Fisher-Yates over `columns.flat()`, repack into columns
+    preserving each column's height. Tile ids travel with their
+    letters so React keeps the same DOM nodes — the existing
+    transform transition handles the slide animation for free.
+    Dictionary-aware quality bias (8 attempts, pick the highest
+    `scoreBoard` result) nudges toward playable adjacencies.
+    Exposed `scoreBoard` as a top-level named export from
+    `letters.js` so lifelines.js can reuse it.
+  - **Three-phase animation.** `SCRAMBLE_START` marks all tile ids
+    in a new `scramblingIds` Set (lifts + jitters via the new
+    `.animate-tile-scramble` keyframe — uses the modern `scale` /
+    `rotate` CSS properties so it composes cleanly with the inline
+    `transform: translate(...)`); `SCRAMBLE_DO` swaps columns at
+    `SCRAMBLE_MUTATE_DELAY = 180 ms` so the slide overlaps the
+    wobble; `SCRAMBLE_END` clears the set at `ANIM.tileScramble =
+    700 ms`. Pointer input on the Board is blocked while
+    `scramblingIds.size > 0`.
+  - **No collateral effects.** No score, no combo, no rowInterval
+    change, no effect on the upcoming queued row. Tile count and
+    per-column heights are preserved.
+  - **Side fix.** `START_GAME` now also preserves `commonDict`
+    (previously was reset to `null`, requiring the dictionary
+    effect to re-fire on each new round).
+
+- **2026-05-12 — Mobile vertical-density polish pass.**
+  - **HUD: score now geometrically centered.** Replaced the mobile
+    `flex justify-between` HUD with `grid grid-cols-3` and
+    `justify-self-{start,center,end}` so the score sits at the true
+    center of the screen, independent of the timer pill / stop
+    button widths.
+  - **Outer container gap 8 → 6 px**, floating word display
+    `h-9 → h-6`, text-2xl → text-lg, badge text-lg → text-sm.
+    Reclaims ~28 px between the HUD and the board card.
+  - **Viewport MIN 7 → 5, BUFFER 3 → 2.** Less aggressive growth:
+    game start (maxHeight=3) now shows 5 rows instead of 7, the
+    board card grows by one row per column-height step from
+    `maxHeight >= 4`, and the full 10 rows are revealed only at
+    `maxHeight >= 8` (was 7). The card is ~140 px shorter at game
+    start, and the next-row preview no longer sits below the fold
+    on common phone viewports during early-mid play.
+
+- **2026-05-12 — Drop the sliding viewport for a bottom-anchored
+  growing one.**
+  - **Symptom.** Even with the 350 ms slide-up hold, the player saw
+    a row "rise up" and then "go back down" 600 ms later as the
+    viewport scrolled up and the just-arrived row 9 clipped out of
+    the bottom of the window.
+  - **Root cause.** A fixed 7-row viewport that slides to expose
+    row 0 cannot keep row 9 visible — it's a structural property
+    of the design, not a timing issue. The 350 ms delay only
+    deferred the disappearance; it didn't prevent it.
+  - **Fix.** Bottom-anchor the viewport and let it grow upward:
+    `viewportRows = clamp(maxHeight + 3, 7, 10)`,
+    `viewportTop = ROWS - viewportRows`. Card stays at 7 rows
+    through maxHeight 4, grows by one row per column-height step
+    after that, maxes out at 10 rows. Row 9 is always visible —
+    new arrivals can never clip. Removed `useState`/`useEffect`
+    for viewportTop (no slide to delay) and
+    `VIEWPORT_SLIDE_UP_HOLD_MS`.
+  - **Tradeoff.** Card grows downward in the page flow when
+    columns get tall (height 5+), pushing the next-row preview
+    lower. Acceptable given the player's attention in late game
+    is on the board itself; better than the previous behavior of
+    making a freshly-arrived row visually disappear.
+
+- **2026-05-12 — Bugfix: invisible row arrivals on slide thresholds.**
+  - **Symptom.** On Frenzy: occasionally "the timer finishes but a new
+    row does not rise up." Reproducible at every 4→5, 5→6, 6→7
+    max-column-height transition.
+  - **Cause.** When a row arrival raised `maxColumnHeight` across a
+    slide threshold, `targetTop` recomputed in the same render the
+    new tile mounted. The new tile at row 9 was positioned at
+    `(9 - newTop) * cellStride`, which exceeded `visibleInnerHeight`
+    by ~`tileGap`. The card's `overflow: hidden` then clipped the
+    tile during its entry animation — visually identical to the
+    arrival not happening.
+  - **Fix.** `viewportTop` is now `useState` + a `useEffect` that
+    defers slide-**up** (target < current) by 350 ms so the arrival
+    animation plays at the still-bottom-anchored viewport before
+    the camera scrolls. Slide-**down** (target ≥ current, e.g.
+    clears shrinking columns) still applies immediately.
+
+- **2026-05-12 — Fixed 7-row sliding viewport on mobile.**
+  - Replaced the "grow visible rows with max column height" crop
+    with a **fixed 7-row window** that scrolls vertically across the
+    board. The window is bottom-aligned (rows 3–9) when the board
+    is safe and slides upward as columns grow, ending at rows 0–6
+    when overflow is imminent — so the player always sees the
+    dangerous part of the board. Off-screen new arrivals are still
+    visible in the next-row preview, so planning information stays
+    complete.
+  - `Board.jsx` prop API changed from `visibleRows` to
+    `(viewportRows, topRow)` so the same component handles both the
+    desktop full-board case (`ROWS, 0`) and the mobile sliding case
+    (`7, dynamic`). `pickTile` now clamps to the visible row range so
+    pointer-capture can't accidentally pick a clipped tile.
+  - New `useNarrowViewport` hook in `PlayScreen.jsx` wraps a
+    `matchMedia('(max-width: 639px)')` listener — orientation
+    changes / window resizes flip the viewport mode live.
+  - **Smaller next-row preview tiles on mobile.** 40 × 30 px with
+    `opacity-50` (was board-tile-sized at `opacity-60`) — preview
+    reads as low-priority incoming info rather than competing with
+    the live board tiles.
+
+- **2026-05-12 — Global Enter / Backspace / Escape.**
+  - The window-level keydown listener used to only handle single
+    letter keys. Extended to also handle `Enter` (submit via
+    `handleEnter`), `Backspace` (pop last selection tile, or last
+    typed char if no selection), and `Escape` (clear both). All
+    gated on "input not focused" to avoid double-firing with the
+    desktop `<input>`'s own onKeyDown. Enter and Backspace fall
+    through (no preventDefault) when there's nothing to submit/pop,
+    so focused lifeline buttons can still be activated via keyboard.
+  - `handleEnter` is read through a fresh-every-render ref
+    (`handleEnterRef`) so the once-attached listener always calls
+    the current version rather than the closure from first render.
+    Fixes desktop-simulating-mobile workflow where drag is tedious
+    and the player wants real keyboard shortcuts.
+
+- **2026-05-12 — Move mobile controls off the board.**
+  - **Lifelines + ✓ now live in a row below the board** (between
+    board and progress bar), not as FABs overlapping the board
+    corners. Layout: `[BOMB] [COLLAPSE] ............ [✓]` with
+    `flex justify-between`. Restores the board as a pure interaction
+    surface — drag-tracing never risks an accidental lifeline tap,
+    and the bottom row of tiles is no longer visually crowded by
+    chrome during pressure moments.
+  - **Compact lifeline buttons 40 → 56 px.** Bumped `w-10 h-10` to
+    `w-14 h-14`, icon 20 → 24 px, badge 16 → 20 px, gap 2 → 3.
+    Matches the ✓ FAB size so all three controls in the new strip
+    read at one size class. The buttons now register as gameplay
+    abilities rather than utility chrome.
+
+- **2026-05-12 — Mobile viewport efficiency pass.**
+  - **Dynamic empty-row cropping.** Board internal size is still
+    `ROWS=10`, but the visible area now only renders the bottom
+    `visibleRows = clamp(maxColHeight + 3, 5, 10)` rows. At game
+    start (max-col = 3) the board shows 6 rows; as columns fill
+    the visible area opens up upward, reaching the full 10 by the
+    time any column has 7+ tiles. `Board.jsx` does the crop via a
+    `yOffset` subtracted from tile positions plus `overflow: hidden`
+    on the card chrome; gameplay code paths (gravity, overflow,
+    path finding) operate on the full 10-row grid unchanged. Picks
+    user feedback's recommended path over reducing `ROWS` so
+    strategic depth is preserved.
+  - **Tighter mobile padding.** Page outer padding `px-3 py-3` →
+    `px-2 py-2`; column gap `gap-3` → `gap-2`. Board frame padding
+    branched: `NARROW_BOARD_FRAME_PADDING=12` (was the same 28 as
+    desktop). Threaded `framePadding` through `useBoardGeometry`
+    + `makeBoardGeometry` so geometry width math correctly reserves
+    the smaller mobile frame. Board card border-radius now
+    `rounded-2xl sm:rounded-3xl` for a tighter mobile look.
+  - **Compressed mobile HUD.** Lifelines pulled out of the top
+    action bar; remaining items are timer · score · stop only.
+  - **Mobile lifeline FABs.** Bomb + collapse compact buttons now
+    float at the board's `-bottom-3 -left-3` corner, mirroring the
+    ✓ FAB on the right. Slight overlap with the board chrome is
+    deliberate per design spec.
+  - **Mobile floating word display.** Slim 36-px band between HUD
+    and board fades in `currentInput` (large navy tracking) plus
+    `+wordBasePoints` in success-green when the word is in ENABLE.
+    No layout shift; opacity-only transition. Replaces the
+    previously-displayed word card / input on mobile entirely.
 
 - **2026-05-12 — Mobile keyboard + scroll fixes.**
   - **No `<input>` or word card on mobile.** PlayScreen's input card

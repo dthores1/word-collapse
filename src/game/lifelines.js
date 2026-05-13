@@ -9,6 +9,7 @@
 //           is preserved so existing word setups don't get shredded.
 
 import { COLS, ROWS } from './constants.js';
+import { scoreBoard } from './letters.js';
 
 // Build the 2D grid view from per-column stacks (same layout used by
 // useGame's memoized grid). row 0 = top, row ROWS-1 = bottom.
@@ -84,6 +85,70 @@ export function computeCollapse(columns) {
     }
   }
 
+  const changed = next.some(
+    (col, c) =>
+      col.length !== columns[c].length ||
+      col.some((tile, i) => tile.id !== columns[c][i]?.id),
+  );
+  return { columns: next, changed };
+}
+
+// SCRAMBLE — reshuffle existing tiles across the board without changing
+// per-column heights, total tile count, or generating new letters.
+//
+// Algorithm:
+//   1. Flatten all tiles into one array.
+//   2. Fisher-Yates shuffle.
+//   3. Repack into columns preserving each column's original height.
+//
+// Tile *ids* travel with their letters (because we shuffle the tile
+// objects themselves), so React keeps the same DOM nodes — the
+// existing transform transition on tiles will animate them sliding
+// from old to new positions.
+//
+// `dictionary`-aware quality bias: try `SCRAMBLE_ATTEMPTS` shuffles,
+// score each resulting board with `scoreBoard`, and return the one
+// with the highest score. This nudges the result toward boards with
+// more available words (≈ "lightly bias toward playable adjacency
+// opportunities" in the spec) without being so restrictive that the
+// shuffle stops feeling random.
+//
+// Returns { columns, changed }. `changed` is false only when no
+// reordering happened (e.g. board has < 2 tiles, or the shuffle
+// happened to land on the same arrangement — rare).
+const SCRAMBLE_ATTEMPTS = 8;
+
+function shuffleOnce(columns) {
+  const all = columns.flat();
+  for (let i = all.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = all[i];
+    all[i] = all[j];
+    all[j] = tmp;
+  }
+  let idx = 0;
+  return columns.map((col) => col.map(() => all[idx++]));
+}
+
+export function scrambleColumns(columns, dictionary) {
+  const total = columns.reduce((acc, col) => acc + col.length, 0);
+  if (total < 2) return { columns, changed: false };
+
+  let best = null;
+  for (let i = 0; i < SCRAMBLE_ATTEMPTS; i++) {
+    const candidate = shuffleOnce(columns);
+    if (!dictionary) {
+      best = { columns: candidate, score: 0 };
+      break;
+    }
+    const grid = gridFromColumns(candidate);
+    const result = scoreBoard(grid, dictionary);
+    if (!best || result.score > best.score) {
+      best = { columns: candidate, score: result.score };
+    }
+  }
+
+  const next = best.columns;
   const changed = next.some(
     (col, c) =>
       col.length !== columns[c].length ||

@@ -16,8 +16,11 @@ export const CELL_STRIDE = TILE_SIZE + TILE_GAP;
 export const BOARD_INNER_WIDTH  = COLS * TILE_SIZE + (COLS - 1) * TILE_GAP;
 export const BOARD_INNER_HEIGHT = ROWS * TILE_SIZE + (ROWS - 1) * TILE_GAP;
 
-/** Padding inside the board chrome in `Board.jsx` (pixels, each side). */
+/** Padding inside the board chrome in `Board.jsx` (pixels, each side).
+    Mobile uses a tighter value so the board can run nearly edge-to-edge
+    horizontally — `useBoardGeometry` selects the appropriate one. */
 export const BOARD_FRAME_PADDING = 28;
+export const NARROW_BOARD_FRAME_PADDING = 12;
 
 // Responsive board: shrink tile size on short/narrow viewports so the play
 // UI tends to stay within the window without scrolling.
@@ -35,13 +38,14 @@ export const NARROW_VIEWPORT_BREAKPOINT = 640;
  * @typedef {{ tileSize: number, tileGap: number, cellStride: number, innerWidth: number, innerHeight: number }} BoardGeometry
  */
 /** @param {number} tileSize */
-export function makeBoardGeometry(tileSize) {
+export function makeBoardGeometry(tileSize, framePadding = BOARD_FRAME_PADDING) {
   const gap = tileSize * (TILE_GAP / TILE_SIZE);
   const cellStride = tileSize + gap;
   return {
     tileSize,
     tileGap: gap,
     cellStride,
+    framePadding,
     innerWidth: COLS * tileSize + (COLS - 1) * gap,
     innerHeight: ROWS * tileSize + (ROWS - 1) * gap,
   };
@@ -66,6 +70,16 @@ export const COMBO_WINDOW_MS = 4000;
 export const LIFELINE_INITIAL_USES = 2;
 export const LIFELINE_MAX = 3;
 export const LIFELINE_REGEN_EVERY_WORDS = 8;
+
+// Scramble — rarer "opportunity recovery" lifeline. Reshuffles the
+// letters on existing tiles without changing column heights or
+// generating new tiles. Player starts with one charge so the
+// mechanic is discoverable from round 1, then earns recharges every
+// N cleared words (capped at MAX) — treasured save-the-board move
+// rather than a panic button.
+export const SCRAMBLE_INITIAL_USES = 1;
+export const SCRAMBLE_MAX = 1;
+export const SCRAMBLE_REGEN_EVERY_WORDS = 15;
 
 // Difficulty tuning. `seconds` is the *initial* row interval — it
 // accelerates over time and additionally scales with board fullness.
@@ -129,9 +143,18 @@ export const QUALITY_ATTEMPTS = 20;
 // clear animation to finish before applying gravity) can reference the
 // same numbers as the CSS keyframes.
 export const ANIM = {
-  tileClear:   150,
-  tileExplode: 280, // bomb-triggered clears use a longer/punchier flash
-  tileMove:    200, // gravity / row-shift transition duration
-  rowImpact:   220,
-  shake:       180,
+  tileClear:    150,
+  tileExplode:  280, // bomb-triggered clears use a longer/punchier flash
+  tileMove:     200, // gravity / row-shift transition duration
+  rowImpact:    220,
+  shake:        180,
+  tileScramble: 700, // scramble lifeline (lift → shuffle → settle)
 };
+
+// Within the scramble animation, the actual column-state mutation
+// happens partway through so the visible tile movement overlaps the
+// lift/jitter phase rather than coming after it. Phase 1 (lift) runs
+// 0 → SCRAMBLE_MUTATE_DELAY; the columns swap at SCRAMBLE_MUTATE_DELAY;
+// transform transitions on the tiles drive the slide; the keyframe
+// completes at ANIM.tileScramble.
+export const SCRAMBLE_MUTATE_DELAY = 180;

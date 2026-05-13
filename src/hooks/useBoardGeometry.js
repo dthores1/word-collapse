@@ -5,6 +5,7 @@ import {
   makeBoardGeometry,
   MAX_TILE_SIZE,
   MIN_TILE_SIZE,
+  NARROW_BOARD_FRAME_PADDING,
   NARROW_MAX_TILE_SIZE,
   NARROW_VIEWPORT_BREAKPOINT,
   ROWS,
@@ -50,10 +51,12 @@ export function useBoardGeometry(containerRef) {
       const rect = el.getBoundingClientRect();
       const availW = rect.width;
       const availH = rect.height;
-      const frame = BOARD_FRAME_PADDING * 2;
+      const isNarrow = availW < NARROW_VIEWPORT_BREAKPOINT;
+      const framePadding = isNarrow ? NARROW_BOARD_FRAME_PADDING : BOARD_FRAME_PADDING;
+      const frame = framePadding * 2;
 
       if (availW < 32) {
-        setGeometry(makeBoardGeometry(MIN_TILE_SIZE));
+        setGeometry(makeBoardGeometry(MIN_TILE_SIZE, framePadding));
         return;
       }
 
@@ -61,7 +64,6 @@ export function useBoardGeometry(containerRef) {
       const colPitch = COLS + (COLS - 1) * gapRatio;
       const rowPitch = ROWS + (ROWS - 1) * gapRatio;
 
-      const isNarrow = availW < NARROW_VIEWPORT_BREAKPOINT;
       let tileSize;
 
       if (isNarrow) {
@@ -84,7 +86,7 @@ export function useBoardGeometry(containerRef) {
       tileSize = Math.max(tileSize, MIN_TILE_SIZE);
       tileSize = Math.round(tileSize * 4) / 4;
 
-      setGeometry(makeBoardGeometry(tileSize));
+      setGeometry(makeBoardGeometry(tileSize, framePadding));
     };
 
     update();

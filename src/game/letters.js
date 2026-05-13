@@ -262,7 +262,7 @@ function enumerateWords(grid, dictionary) {
 // obscure 3-letter entries that wouldn't translate to "a human can spot
 // this fast" — restricting the bar to length 4+ correlates much better
 // with player-perceived playability.
-function scoreBoard(grid, dictionary) {
+export function scoreBoard(grid, dictionary) {
   const words = enumerateWords(grid, dictionary);
   const newIds = newRowIds(grid);
   const highIds = highestOccupiedRowIds(grid);

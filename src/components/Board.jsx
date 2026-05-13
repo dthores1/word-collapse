@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD_FRAME_PADDING,
   COLS,
   ROWS,
   TILE_SIZE,
@@ -26,19 +25,31 @@ export function Board({
   selectedIds,
   clearingIds,
   explodingIds,
+  scramblingIds,
   danger,
   shakeKey,
   hardShakeKey,
   redFlashKey,
   onSelectionChange,
   onCommit,
+  viewportRows = ROWS,
+  topRow = 0,
 }) {
   const {
     tileSize,
     cellStride,
+    framePadding,
     innerWidth: BOARD_INNER_WIDTH,
-    innerHeight: BOARD_INNER_HEIGHT,
   } = geometry;
+  // Sliding viewport. The board is *logically* still ROWS tall —
+  // gameplay, gravity, overflow detection, path finding all unchanged.
+  // We only show `viewportRows` rows at a time, starting at `topRow`,
+  // so the visible window scrolls from the bottom (rows 3-9 at game
+  // start) toward the top (rows 0-6 near overflow) as columns fill.
+  const viewport = Math.max(1, Math.min(ROWS, viewportRows));
+  const safeTop = Math.max(0, Math.min(ROWS - viewport, topRow));
+  const yOffset = safeTop * cellStride;
+  const visibleInnerHeight = viewport * tileSize + (viewport - 1) * (cellStride - tileSize);
   const containerRef = useRef(null);
   const draggingRef = useRef(false);
   const movedRef = useRef(false);
@@ -71,7 +82,7 @@ export function Board({
     el.classList.add('animate-shake-hard');
   }, [hardShakeKey]);
 
-  // Flatten tiles → list of { id, letter, row, col, isClearing, isExploding }.
+  // Flatten tiles → list of { id, letter, row, col, isClearing, isExploding, isScrambling }.
   const tiles = useMemo(() => {
     const out = [];
     for (let c = 0; c < COLS; c++) {
@@ -86,23 +97,32 @@ export function Board({
           col: c,
           clearing: clearingIds?.has(tile.id) ?? false,
           exploding: explodingIds?.has(tile.id) ?? false,
+          scrambling: scramblingIds?.has(tile.id) ?? false,
         });
       }
     }
     return out;
-  }, [columns, clearingIds, explodingIds]);
+  }, [columns, clearingIds, explodingIds, scramblingIds]);
 
   // ---- pointer-driven drag selection ----
+  // (clientY → row) accounts for the cropped top: the container's local
+  // y=0 corresponds to the first *visible* row, so add `yOffset` to map
+  // back into the full-board coordinate space the rest of the code uses.
+  // Reject taps/drags outside the visible viewport so pointer-capture
+  // can't pick a row that's clipped off-screen.
   const pickTile = (clientX, clientY) => {
     const container = containerRef.current;
     if (!container) return null;
     const rect = container.getBoundingClientRect();
     const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    if (x < 0 || y < 0) return null;
+    const yLocal = clientY - rect.top;
+    if (x < 0 || yLocal < 0) return null;
+    if (yLocal > visibleInnerHeight) return null;
+    const y = yLocal + yOffset;
     const col = Math.floor(x / cellStride);
     const row = Math.floor(y / cellStride);
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return null;
+    if (row < safeTop || row >= safeTop + viewport) return null;
+    if (col < 0 || col >= COLS) return null;
     const xInCell = x - col * cellStride;
     const yInCell = y - row * cellStride;
     if (xInCell > tileSize || yInCell > tileSize) return null;
@@ -136,6 +156,9 @@ export function Board({
   //     the path stays put for the next tap.
   const handlePointerDown = (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // Block input while the scramble animation is in flight — tiles
+    // are mid-shuffle and selecting them would be meaningless.
+    if (scramblingIds && scramblingIds.size > 0) return;
     const tile = pickTile(e.clientX, e.clientY);
     if (!tile) return;
     e.preventDefault();
@@ -228,6 +251,8 @@ export function Board({
   };
 
   // ---- selection-line geometry ----
+  // y coords subtract `yOffset` so the SVG lives in the cropped container's
+  // coordinate space (where the topmost visible row sits at y = 0).
   const linePoints = useMemo(() => {
     if (!selectedIds || selectedIds.size === 0) return [];
     const idToPos = new Map();
@@ -238,20 +263,20 @@ export function Board({
       .sort((a, b) => orderInPath(a.id, b.id, selectedIds))
       .map((t) => ({
         x: t.col * cellStride + tileSize / 2,
-        y: t.row * cellStride + tileSize / 2,
+        y: t.row * cellStride + tileSize / 2 - yOffset,
       }));
-  }, [tiles, selectedIds, cellStride, tileSize]);
+  }, [tiles, selectedIds, cellStride, tileSize, yOffset]);
 
   return (
     <div
       ref={shakeWrapRef}
       className={[
-        'relative rounded-3xl bg-paper border border-border shadow-xl mx-auto',
-        'transition-shadow',
+        'relative rounded-2xl sm:rounded-3xl bg-paper border border-border shadow-xl mx-auto',
+        'transition-shadow overflow-hidden',
         danger ? 'shadow-danger-300/50 ring-2 ring-danger-300/60 animate-danger-pulse' : '',
       ].join(' ')}
       style={{
-        padding: BOARD_FRAME_PADDING,
+        padding: framePadding,
         width: 'fit-content',
       }}
     >
@@ -269,13 +294,17 @@ export function Board({
         style={{
           position: 'relative',
           width: BOARD_INNER_WIDTH,
-          height: BOARD_INNER_HEIGHT,
+          height: visibleInnerHeight,
           userSelect: 'none',
+          // CSS transition on height drives the "board opens up" animation
+          // as columns grow tall enough to demand more visible rows.
+          transition: 'height 240ms cubic-bezier(0.25, 0.8, 0.25, 1)',
         }}
       >
-        {/* Empty-cell placeholders so the grid reads as 5×5 even when sparse */}
-        {Array.from({ length: ROWS * COLS }).map((_, i) => {
-          const r = Math.floor(i / COLS);
+        {/* Empty-cell placeholders — only for the *visible* rows. Their
+            row index is offset so positioning matches the cropped view. */}
+        {Array.from({ length: viewport * COLS }).map((_, i) => {
+          const r = Math.floor(i / COLS) + safeTop;
           const c = i % COLS;
           const corner = Math.round(16 * (tileSize / TILE_SIZE));
           return (
@@ -285,7 +314,7 @@ export function Board({
                 position: 'absolute',
                 width: tileSize,
                 height: tileSize,
-                transform: `translate(${c * cellStride}px, ${r * cellStride}px)`,
+                transform: `translate(${c * cellStride}px, ${r * cellStride - yOffset}px)`,
                 borderRadius: corner,
                 background: 'transparent',
                 border: '1px dashed rgba(15, 23, 42, 0.05)',
@@ -299,7 +328,7 @@ export function Board({
         {linePoints.length >= 2 && (
           <svg
             width={BOARD_INNER_WIDTH}
-            height={BOARD_INNER_HEIGHT}
+            height={visibleInnerHeight}
             style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
           >
             <polyline
@@ -321,9 +350,11 @@ export function Board({
             letter={t.letter}
             row={t.row}
             col={t.col}
+            yOffset={yOffset}
             selected={selectedIds?.has(t.id)}
             clearing={t.clearing}
             exploding={t.exploding}
+            scrambling={t.scrambling}
             explodeDelay={t.exploding ? idx * 18 : 0}
           />
         ))}
@@ -335,7 +366,7 @@ export function Board({
   );
 }
 
-function Tile({ geometry, letter, row, col, selected, clearing, exploding, explodeDelay = 0 }) {
+function Tile({ geometry, letter, row, col, yOffset = 0, selected, clearing, exploding, scrambling, explodeDelay = 0 }) {
   const { tileSize, cellStride } = geometry;
   // First mount: render below the board, then transition into final spot.
   const [mounted, setMounted] = useState(false);
@@ -346,7 +377,11 @@ function Tile({ geometry, letter, row, col, selected, clearing, exploding, explo
 
   const renderRow = mounted ? row : ROWS;
   const x = col * cellStride;
-  const y = renderRow * cellStride;
+  // Subtract the cropped-rows offset so tile y maps into the visible
+  // container's coordinate space (top-visible-row = y 0). When the row
+  // is in the cropped area, y goes negative and the parent's
+  // overflow: hidden clips the tile.
+  const y = renderRow * cellStride - yOffset;
   const fontSize = Math.round(28 * (tileSize / TILE_SIZE));
 
   return (
@@ -354,7 +389,13 @@ function Tile({ geometry, letter, row, col, selected, clearing, exploding, explo
       className={[
         'absolute flex items-center justify-center font-display font-extrabold select-none',
         'rounded-2xl border',
-        exploding ? 'animate-tile-explode' : clearing ? 'animate-tile-clear' : '',
+        exploding
+          ? 'animate-tile-explode'
+          : clearing
+            ? 'animate-tile-clear'
+            : scrambling
+              ? 'animate-tile-scramble'
+              : '',
         selected
           ? 'bg-primary-800 text-paper border-primary-900 shadow-lg shadow-primary-800/40 scale-[1.05]'
           : exploding

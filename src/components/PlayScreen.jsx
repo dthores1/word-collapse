@@ -2,9 +2,37 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Board } from './Board.jsx';
 import { LifelinePanel } from './LifelinePanel.jsx';
 import { Toasts } from './Toasts.jsx';
-import { DIFFICULTY, MIN_WORD_LENGTH } from '../game/constants.js';
+import { DIFFICULTY, MIN_WORD_LENGTH, ROWS } from '../game/constants.js';
 import { useBoardGeometry } from '../hooks/useBoardGeometry.js';
 import { findPath, pathToWord } from '../game/path.js';
+import { wordBasePoints } from '../game/scoring.js';
+
+// Mobile viewport. The board is logically ROWS tall; on mobile we
+// render a bottom-anchored window that starts at MIN rows (when
+// columns are short) and **grows upward** to fit taller columns
+// plus BUFFER rows of planning space above the topmost tile. Row 9
+// (where new arrivals enter) is therefore always visible — the
+// bug-free invariant we get for free by anchoring the bottom rather
+// than sliding.
+//
+//   viewportRows = clamp(maxColHeight + BUFFER, MIN, ROWS)
+//   viewportTop  = ROWS - viewportRows
+//
+// Worked examples (MIN=5, BUFFER=2):
+//   maxHeight 0–3 → viewport 5 rows  (rows 5–9, game-start compact)
+//   maxHeight 4   → viewport 6 rows  (rows 4–9)
+//   maxHeight 5   → viewport 7 rows  (rows 3–9)
+//   maxHeight 6   → viewport 8 rows  (rows 2–9)
+//   maxHeight 7   → viewport 9 rows  (rows 1–9)
+//   maxHeight 8+  → viewport 10 rows (rows 0–9, full board)
+//
+// The card grows downward in the page flow as `viewportRows` climbs,
+// pushing the next-row preview lower. Acceptable: by the time the
+// growth happens the player is in late-game pressure mode and the
+// board is the only thing they're looking at.
+const MOBILE_VIEWPORT_MIN_ROWS = 5;
+const MOBILE_VIEWPORT_BUFFER = 2;
+const NARROW_BREAKPOINT_PX = 640;
 
 // PlayScreen owns the *input* state for the round. There are two coexisting
 // input modes that share a single `selection` path:
@@ -70,6 +98,38 @@ export function PlayScreen({ game, dictionary }) {
     return dictionary.has(currentInput.toLowerCase());
   }, [canSubmit, dictionary, currentInput]);
 
+  // Viewport parameters for the Board. Logically the board is still
+  // ROWS tall (overflow check, gravity, path finding all use the full
+  // grid) — these props only control which slice of it is rendered.
+  //
+  //   Desktop:  viewportRows=ROWS, viewportTop=0  — show everything.
+  //   Mobile:   bottom-anchored, grows upward — see comment block
+  //             at the top of this file for the worked examples.
+  const narrow = useNarrowViewport();
+  const { viewportRows, viewportTop } = useMemo(() => {
+    if (!narrow) return { viewportRows: ROWS, viewportTop: 0 };
+    const maxHeight = game.columns.reduce(
+      (acc, col) => Math.max(acc, col.length),
+      0,
+    );
+    const rows = Math.min(
+      ROWS,
+      Math.max(MOBILE_VIEWPORT_MIN_ROWS, maxHeight + MOBILE_VIEWPORT_BUFFER),
+    );
+    return { viewportRows: rows, viewportTop: ROWS - rows };
+  }, [narrow, game.columns]);
+
+  // Live preview of the points this commit would award. Skips combo /
+  // chain multipliers because they fire on the resulting clear, not on
+  // the path itself — what the player sees here is the *base* word
+  // value, which is what makes word-length tradeoffs legible. Only
+  // shown when the word is in ENABLE so it doesn't lie about invalid
+  // submissions.
+  const potentialBase = useMemo(
+    () => (isValidWord ? wordBasePoints(currentInput) : 0),
+    [isValidWord, currentInput],
+  );
+
   // First-time submit-hint trigger. Fire once per session when the player
   // first builds a 3-letter selection (drag landed in tap-mode, or pure
   // taps). Hidden once they actually commit a word.
@@ -105,21 +165,58 @@ export function PlayScreen({ game, dictionary }) {
     inputRef.current?.focus();
   }, [game.phase]);
 
-  // Global auto-focus: any letter keypress while the input is unfocused
-  // pulls focus to it AND injects the letter (since the keystroke that
-  // started focus doesn't reliably reach a newly-focused element). We use
-  // a ref-stash so the listener never re-attaches mid-game.
-  const liveRef = useRef({
-    typed,
-    selectionLen: selection.length,
-  });
+  // Window-level keydown listener — runs only during `phase === 'playing'`
+  // and only when the input isn't focused (desktop's <input> has its own
+  // onKeyDown for Enter/Escape; we'd double-fire if both ran).
+  //
+  // Handles four cases:
+  //   • letter keys → focus the input + inject the letter (browsers
+  //     drop the keystroke that initiates focus, so we re-emit it)
+  //   • Enter      → submit current selection/typed
+  //   • Backspace  → pop last tile (or last typed char if no selection)
+  //   • Escape     → clear everything
+  //
+  // Enter/Backspace fall through to the focused element when there's
+  // nothing to submit/pop, so a focused button (e.g. lifeline) can still
+  // be activated via the keyboard.
+  //
+  // Refs stash the latest values + the latest handleEnter so the listener
+  // never re-attaches mid-game and never reads stale state.
+  const liveRef = useRef({ typed, selectionLen: selection.length });
   liveRef.current = { typed, selectionLen: selection.length };
+  const handleEnterRef = useRef(() => {});
 
   useEffect(() => {
     if (game.phase !== 'playing') return undefined;
     const handler = (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (document.activeElement === inputRef.current) return;
+
+      if (e.key === 'Enter') {
+        const { selectionLen, typed: prevTyped } = liveRef.current;
+        if (selectionLen === 0 && prevTyped.length === 0) return;
+        e.preventDefault();
+        handleEnterRef.current?.();
+        return;
+      }
+      if (e.key === 'Backspace') {
+        const { selectionLen, typed: prevTyped } = liveRef.current;
+        if (selectionLen === 0 && prevTyped.length === 0) return;
+        e.preventDefault();
+        if (selectionLen > 0) {
+          setSelection((prev) => prev.slice(0, -1));
+        } else {
+          setTyped(prevTyped.slice(0, -1));
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSelection([]);
+        setTyped('');
+        return;
+      }
+
       if (e.key.length !== 1 || !/^[a-zA-Z]$/.test(e.key)) return;
       e.preventDefault();
       const { typed: prevTyped, selectionLen } = liveRef.current;
@@ -131,8 +228,9 @@ export function PlayScreen({ game, dictionary }) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-    // handleTypedChange is stable enough for this; we still re-bind on
-    // phase changes so the listener is gone on idle/gameover screens.
+    // handleTypedChange / handleEnter are accessed via refs so they're
+    // always current; we only rebind the listener on phase changes so
+    // it's gone on idle/gameover screens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.phase]);
 
@@ -170,6 +268,10 @@ export function PlayScreen({ game, dictionary }) {
     if (selection.length > 0) commitSelection();
     else commitTyped();
   };
+  // Stash the latest handleEnter so the once-attached window keydown
+  // listener always calls the current version (rather than the closure
+  // from the first render).
+  handleEnterRef.current = handleEnter;
 
   const handleTypedChange = (raw) => {
     // Typing always wins — drop any in-flight tile selection so the input
@@ -181,46 +283,61 @@ export function PlayScreen({ game, dictionary }) {
   const cfg = DIFFICULTY[game.difficulty];
 
   return (
-    <div className="min-h-[100dvh] w-full px-3 py-3 sm:px-6 sm:py-6 sm:flex sm:flex-col">
+    <div className="min-h-[100dvh] w-full px-2 py-2 sm:px-6 sm:py-6 sm:flex sm:flex-col">
       {/* Page-level layout: on mobile we allow natural document flow so the
           board can grow into a larger width-driven size and the page can
           scroll vertically when needed. On desktop the flex-column with
           flex-1 children keeps everything fit-to-viewport. */}
-      <div className="max-w-3xl mx-auto w-full flex flex-col gap-3 sm:flex-1 sm:min-h-0 sm:gap-5">
+      <div className="max-w-3xl mx-auto w-full flex flex-col gap-1.5 sm:flex-1 sm:min-h-0 sm:gap-5">
         {/* ============================================================
-            MOBILE — single compact action bar.
-            Difficulty card and words count are dropped (difficulty is
-            chosen at round-start and never changes; words count is
-            available on the gameover screen). Lifelines live here too
-            so the player isn't forced to reach below the board for an
-            emergency bomb/collapse.
+            MOBILE — three-column HUD: timer · score · stop.
+            Grid layout so the score sits at the geometric *center*
+            of the screen rather than between two flex siblings of
+            unequal width. Lifelines + ✓ live in the control strip
+            below the board.
             ============================================================ */}
-        <div className="flex sm:hidden shrink-0 items-center justify-between gap-2">
-          <Pill>
-            <ClockIcon />
-            <span className="font-mono text-base font-semibold tabular-nums">
-              {formatTime(game.elapsedMs)}
-            </span>
-          </Pill>
-          <div className="font-display font-extrabold text-2xl text-primary-800 leading-none tabular-nums">
+        <div className="grid sm:hidden shrink-0 grid-cols-3 items-center px-1">
+          <div className="justify-self-start">
+            <Pill>
+              <ClockIcon />
+              <span className="font-mono text-base font-semibold tabular-nums">
+                {formatTime(game.elapsedMs)}
+              </span>
+            </Pill>
+          </div>
+          <div className="justify-self-center font-display font-extrabold text-2xl text-primary-800 leading-none tabular-nums">
             {game.score}
           </div>
           <button
             type="button"
             onClick={game.stop}
-            className="w-9 h-9 shrink-0 rounded-full bg-danger-500 hover:bg-danger-600 active:bg-danger-700 flex items-center justify-center shadow-md shadow-danger-500/40 transition"
+            className="justify-self-end w-9 h-9 shrink-0 rounded-full bg-danger-500 hover:bg-danger-600 active:bg-danger-700 flex items-center justify-center shadow-md shadow-danger-500/40 transition"
             aria-label="Stop game"
             title="Stop game"
           >
             <StopIcon />
           </button>
-          <LifelinePanel
-            compact
-            bombUses={game.bombUses}
-            collapseUses={game.collapseUses}
-            onBomb={game.useBomb}
-            onCollapse={game.useCollapse}
-          />
+        </div>
+
+        {/* Mobile-only floating word display — sits between HUD and board.
+            Fades opacity in/out so it doesn't reserve visual weight when
+            there's no selection. Shows the live base score when the word
+            is in ENABLE (combo / chain multipliers fire on the resulting
+            clear, not the path itself, so the base is what gives the
+            player a length-tradeoff signal). */}
+        <div
+          className="sm:hidden h-6 flex items-center justify-center gap-2 pointer-events-none transition-opacity duration-150"
+          style={{ opacity: currentInput ? 1 : 0 }}
+          aria-hidden={!currentInput}
+        >
+          <span className="font-display font-extrabold text-lg tracking-[0.2em] text-primary-800 leading-none">
+            {currentInput || ' '}
+          </span>
+          {potentialBase > 0 && (
+            <span className="font-display font-extrabold text-sm text-good leading-none">
+              +{potentialBase}
+            </span>
+          )}
         </div>
 
         {/* ============================================================
@@ -322,10 +439,13 @@ export function PlayScreen({ game, dictionary }) {
                 geometry={boardGeometry}
                 grid={game.grid}
                 columns={game.columns}
+                viewportRows={viewportRows}
+                topRow={viewportTop}
                 selection={selection}
                 selectedIds={selectedIds}
                 clearingIds={game.clearingIds}
                 explodingIds={game.explodingIds}
+                scramblingIds={game.scramblingIds}
                 danger={game.danger}
                 shakeKey={game.shakeKey}
                 hardShakeKey={game.hardShakeKey}
@@ -334,31 +454,44 @@ export function PlayScreen({ game, dictionary }) {
                 onCommit={commitSelection}
               />
               <Toasts toasts={game.toasts} />
-              {/* Mobile-only submit FAB anchored to the board's
-                  bottom-right corner. Color states match the desktop
-                  ✓ inside the input card: grey when input is too short
-                  or has no realisable path, navy when length-OK but
-                  not in ENABLE, green when the word will score. */}
-              <div className="sm:hidden absolute -bottom-3 -right-3 z-10">
-                <SubmitButton
-                  large
-                  enabled={canSubmit}
-                  valid={isValidWord}
-                  onClick={handleEnter}
-                />
-              </div>
             </div>
             {/* Desktop sidecar lifelines only — mobile renders them in
-                the top action bar instead. */}
+                a dedicated control row below the board (see below). */}
             <div className="hidden sm:absolute sm:top-1/2 sm:left-full sm:ml-4 sm:flex sm:-translate-y-1/2">
               <LifelinePanel
                 bombUses={game.bombUses}
                 collapseUses={game.collapseUses}
+                scrambleUses={game.scrambleUses}
                 onBomb={game.useBomb}
                 onCollapse={game.useCollapse}
+                onScramble={game.useScramble}
               />
             </div>
           </div>
+        </div>
+
+        {/* Mobile-only control strip — lifelines on the left, ✓ on the
+            right. Lives BETWEEN the board and the progress bar so the
+            board stays a pure interaction surface (no controls adjacent
+            to live tiles → no accidental taps during drag-select).
+            All three buttons are 56×56 so the touch targets read as
+            gameplay abilities, not utility chrome. */}
+        <div className="flex sm:hidden shrink-0 items-center justify-between gap-3 px-1">
+          <LifelinePanel
+            compact
+            bombUses={game.bombUses}
+            collapseUses={game.collapseUses}
+            scrambleUses={game.scrambleUses}
+            onBomb={game.useBomb}
+            onCollapse={game.useCollapse}
+            onScramble={game.useScramble}
+          />
+          <SubmitButton
+            large
+            enabled={canSubmit}
+            valid={isValidWord}
+            onClick={handleEnter}
+          />
         </div>
 
         <div className="flex shrink-0 flex-col items-center gap-4 sm:gap-5">
@@ -379,18 +512,29 @@ export function PlayScreen({ game, dictionary }) {
             />
           </div>
           <div className="flex justify-center" aria-hidden>
+            {/* Mobile preview is intentionally smaller (40×30) with a
+                lower opacity so it reads as "incoming, low-priority info"
+                rather than competing with the real board tiles. Desktop
+                keeps the board-tile-sized preview. */}
             <div
-              className="grid grid-flow-col gap-1.5 opacity-60"
-              style={{ gridAutoColumns: `${boardGeometry.tileSize}px` }}
+              className={[
+                'grid grid-flow-col gap-1.5',
+                narrow ? 'opacity-50' : 'opacity-60',
+              ].join(' ')}
+              style={{
+                gridAutoColumns: `${narrow ? 40 : boardGeometry.tileSize}px`,
+              }}
             >
               {game.nextRow.map((letter, idx) => (
                 <div
                   key={idx}
-                  className="rounded-xl bg-surface-soft border border-border flex items-center justify-center font-display font-extrabold text-ink-500"
+                  className="rounded-lg bg-surface-soft border border-border flex items-center justify-center font-display font-extrabold text-ink-500"
                   style={{
-                    width: boardGeometry.tileSize,
-                    height: Math.round(boardGeometry.tileSize * 0.7),
-                    fontSize: Math.min(18, Math.round(14 + boardGeometry.tileSize * 0.09)),
+                    width: narrow ? 40 : boardGeometry.tileSize,
+                    height: narrow ? 30 : Math.round(boardGeometry.tileSize * 0.7),
+                    fontSize: narrow
+                      ? 14
+                      : Math.min(18, Math.round(14 + boardGeometry.tileSize * 0.09)),
                   }}
                 >
                   {letter}
@@ -415,6 +559,26 @@ export function PlayScreen({ game, dictionary }) {
       </div>
     </div>
   );
+}
+
+// Tracks whether the viewport is in the "narrow" (mobile) regime —
+// kept in sync with a `matchMedia` listener so a rotation or window
+// resize re-renders the play screen and switches the board between
+// the desktop full-board layout and the mobile sliding viewport.
+function useNarrowViewport() {
+  const [narrow, setNarrow] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < NARROW_BREAKPOINT_PX;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mq = window.matchMedia(`(max-width: ${NARROW_BREAKPOINT_PX - 1}px)`);
+    const update = () => setNarrow(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+  return narrow;
 }
 
 // Countdown for the "Next Row" label. Shows whole seconds when ≥ 3, one
