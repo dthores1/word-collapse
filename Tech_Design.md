@@ -544,7 +544,14 @@ Three input flows feed the same selection:
   extends through 8-adjacent neighbours; backtracking by dragging
   back over the second-to-last tile pops the last entry. Pointer-up
   *after movement* commits unconditionally (PlayScreen rejects
-  too-short paths).
+  too-short paths). The hit zone is **center-biased during drag**:
+  `pickTile` accepts an optional `hitInset` (0 for pointer-down,
+  `DRAG_HIT_INSET = 0.22` for pointer-move) that shrinks the
+  accepting region to the central 56% of each tile. A diagonal drag
+  from A to D grazes the corners of the cardinal neighbours B and C
+  — those corner regions sit outside the inset, so the path doesn't
+  accidentally pick them up. Initial taps still use the full tile so
+  edge taps register.
 - **Tap-build** — pointer-up *without movement* is treated as a tap
   rather than a drag and **does not clear the path**. Subsequent taps
   extend / backtrack the selection:
@@ -808,6 +815,26 @@ rather than overcounting via Scrabble-tournament short words.
 ---
 
 ## 10. Change log
+
+- **2026-05-13 — Center-biased hit zone for drag selection.**
+  - **Symptom.** Diagonal drags on mobile frequently picked up the
+    cardinal neighbour (right/left/above/below) of the source tile
+    instead of (or in addition to) the diagonal target — the finger's
+    path grazed the cardinal cell's interior briefly on the way
+    across.
+  - **Fix.** `pickTile` accepts an optional `hitInset`; pointer-down
+    keeps the generous full-tile hit area so taps near the edge
+    still register, while pointer-move uses
+    `DRAG_HIT_INSET = 0.22` to restrict the hit zone to the central
+    ~56% of each tile. A clean diagonal from A's center to D's
+    center crosses the *corners* of B and C, which sit well outside
+    the inset rectangle, so neither cardinal neighbour gets
+    accidentally picked up. Off-diagonal drags that genuinely linger
+    over a cardinal cell still pick it up (the finger enters that
+    cell's inset region).
+  - Threshold tuned by feel; lower values feel slacker (cardinals
+    triggered too easily), higher values feel sticky (finger has to
+    overshoot before a tile commits).
 
 - **2026-05-12 — Pin layout + scrollable board.**
   - **No more full-page scroll.** PlayScreen outer wrapper is now

@@ -99,7 +99,23 @@ export function Board({
   }, [columns, clearingIds, explodingIds, scramblingIds]);
 
   // ---- pointer-driven drag selection ----
-  const pickTile = (clientX, clientY) => {
+  //
+  // `hitInset` controls how forgiving the hit zone is:
+  //   0      — full tile bounds (initial tap should accept anywhere
+  //            on the tile, including the edges).
+  //   0.22   — central ~56% of the tile (drag progression). The finger
+  //            must travel into the tile's core before it registers as
+  //            entered. This is what makes diagonal drags work
+  //            cleanly: the path from A's center to D's center grazes
+  //            the corners of B / C, which sit well outside the
+  //            inset region, so B / C never get picked up.
+  //
+  // The current threshold of 0.22 (i.e. each side inset by 22% of
+  // tileSize) was picked by feel; lower values feel slacker (more
+  // accidental cardinal selections during diagonal drags), higher
+  // values feel sticky (finger has to overshoot before a tile counts).
+  const DRAG_HIT_INSET = 0.22;
+  const pickTile = (clientX, clientY, hitInset = 0) => {
     const container = containerRef.current;
     if (!container) return null;
     const rect = container.getBoundingClientRect();
@@ -113,6 +129,17 @@ export function Board({
     const xInCell = x - col * cellStride;
     const yInCell = y - row * cellStride;
     if (xInCell > tileSize || yInCell > tileSize) return null;
+    if (hitInset > 0) {
+      const inset = tileSize * hitInset;
+      if (
+        xInCell < inset ||
+        xInCell > tileSize - inset ||
+        yInCell < inset ||
+        yInCell > tileSize - inset
+      ) {
+        return null;
+      }
+    }
     const tile = gridRef.current[row]?.[col];
     if (!tile) return null;
     return { row, col, id: tile.id };
@@ -183,7 +210,9 @@ export function Board({
 
   const handlePointerMove = (e) => {
     if (!draggingRef.current) return;
-    const tile = pickTile(e.clientX, e.clientY);
+    // Strict, center-biased hit zone during drag — finger must
+    // settle into a tile's core before it joins the path.
+    const tile = pickTile(e.clientX, e.clientY, DRAG_HIT_INSET);
     if (!tile) return;
     const path = pathRef.current;
     if (path.length === 0) {
