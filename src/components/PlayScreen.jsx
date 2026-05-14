@@ -85,11 +85,29 @@ export function PlayScreen({ game, dictionary }) {
 
   // Scrollable container that wraps the Board. On mobile the board is
   // taller than this region, so the user scrolls within it; on desktop
-  // it fits and overflow-y:auto is a no-op. Auto-scroll-to-bottom on
-  // every row arrival (totalTiles increase) so the freshly-arrived row
-  // is visible without the player having to scroll manually.
+  // it fits and overflow-y:auto is a no-op.
   const boardScrollRef = useRef(null);
   const prevTotalTilesRef = useRef(0);
+
+  // Game-start scroll-to-bottom. `useBoardGeometry` settles its
+  // ResizeObserver asynchronously — the very first render uses the
+  // default desktop tile size and the bottom-anchor scroll computed
+  // from that is wrong by the time the observer updates to mobile
+  // tile size. Scroll immediately + once more after a short delay so
+  // the post-settle layout also lands at the bottom. Both scrolls
+  // are `auto` (instant) because the player hasn't engaged yet.
+  useEffect(() => {
+    if (game.phase !== 'playing') return undefined;
+    const el = boardScrollRef.current;
+    if (!el) return undefined;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+    const t = setTimeout(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [game.phase]);
+
+  // Row arrival mid-game — smoothly scroll to keep the new row visible.
   useEffect(() => {
     const el = boardScrollRef.current;
     if (!el) return;
@@ -98,6 +116,31 @@ export function PlayScreen({ game, dictionary }) {
     }
     prevTotalTilesRef.current = game.totalTiles;
   }, [game.totalTiles]);
+
+  // Out-of-view affordances. Track whether the board scroll container
+  // has content above or below its visible region so we can render
+  // small chevron chips as a "more letters this way" hint. Re-attach
+  // the scroll listener whenever the board geometry changes
+  // (scrollHeight changes with it).
+  const [scrollMore, setScrollMore] = useState({ up: false, down: false });
+  useEffect(() => {
+    const el = boardScrollRef.current;
+    if (!el) return undefined;
+    const update = () => {
+      setScrollMore({
+        up: el.scrollTop > 4,
+        down: el.scrollTop + el.clientHeight < el.scrollHeight - 4,
+      });
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener('scroll', update);
+      ro.disconnect();
+    };
+  }, [boardGeometry.tileSize]);
 
   // Live preview of the points this commit would award. Skips combo /
   // chain multipliers because they fire on the resulting clear, not on
@@ -435,51 +478,59 @@ export function PlayScreen({ game, dictionary }) {
           </div>
         </div>
 
-        {/* Board scroll region. flex-1 so it takes all remaining vertical
-            space between the (pinned) HUD/word display above and the
-            (pinned) control strip / progress / next-row below.
-            `overflow-y-auto` scrolls when content (the full 10-row
-            board) is taller than the region — i.e. mobile. Desktop
-            content fits and this is a no-op.
-            `overscroll-contain` keeps the page from bouncing /
-            triggering pull-to-refresh outside this region. */}
-        <div
-          ref={(node) => {
-            boardAreaRef.current = node;
-            boardScrollRef.current = node;
-          }}
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex items-start sm:items-center justify-center py-1 sm:min-h-[200px]"
-        >
-          <div className="relative inline-block">
-            <Board
-              geometry={boardGeometry}
-              grid={game.grid}
-              columns={game.columns}
-              selection={selection}
-              selectedIds={selectedIds}
-              clearingIds={game.clearingIds}
-              explodingIds={game.explodingIds}
-              scramblingIds={game.scramblingIds}
-              danger={game.danger}
-              shakeKey={game.shakeKey}
-              hardShakeKey={game.hardShakeKey}
-              redFlashKey={game.redFlashKey}
-              onSelectionChange={setSelection}
-              onCommit={commitSelection}
-            />
-            {/* Desktop sidecar lifelines only — mobile renders them in
-                a dedicated control row below the board (see below). */}
-            <div className="hidden sm:absolute sm:top-1/2 sm:left-full sm:ml-4 sm:flex sm:-translate-y-1/2">
-              <LifelinePanel
-                bombUses={game.bombUses}
-                collapseUses={game.collapseUses}
-                scrambleUses={game.scrambleUses}
-                onBomb={game.useBomb}
-                onCollapse={game.useCollapse}
-                onScramble={game.useScramble}
+        {/* Board area. `relative flex-1` parent so we can overlay
+            chevron chips above/below the scroll container — they hint
+            at out-of-view rows without consuming layout space. */}
+        <div className="relative flex-1 min-h-0 sm:min-h-[200px]">
+          {/* Scroll container. `overflow-y-auto` scrolls when content
+              (the full 10-row board) is taller than the region — i.e.
+              mobile. Desktop content fits and this is a no-op.
+              `overscroll-contain` keeps the page from bouncing /
+              triggering pull-to-refresh outside this region. */}
+          <div
+            ref={(node) => {
+              boardAreaRef.current = node;
+              boardScrollRef.current = node;
+            }}
+            className="absolute inset-0 overflow-y-auto overscroll-contain flex items-start sm:items-center justify-center py-1"
+          >
+            <div className="relative inline-block">
+              <Board
+                geometry={boardGeometry}
+                grid={game.grid}
+                columns={game.columns}
+                selection={selection}
+                selectedIds={selectedIds}
+                clearingIds={game.clearingIds}
+                explodingIds={game.explodingIds}
+                scramblingIds={game.scramblingIds}
+                danger={game.danger}
+                shakeKey={game.shakeKey}
+                hardShakeKey={game.hardShakeKey}
+                redFlashKey={game.redFlashKey}
+                onSelectionChange={setSelection}
+                onCommit={commitSelection}
               />
+              {/* Desktop sidecar lifelines only — mobile renders them
+                  in a dedicated control row below the board. */}
+              <div className="hidden sm:absolute sm:top-1/2 sm:left-full sm:ml-4 sm:flex sm:-translate-y-1/2">
+                <LifelinePanel
+                  bombUses={game.bombUses}
+                  collapseUses={game.collapseUses}
+                  scrambleUses={game.scrambleUses}
+                  onBomb={game.useBomb}
+                  onCollapse={game.useCollapse}
+                  onScramble={game.useScramble}
+                />
+              </div>
             </div>
           </div>
+
+          {/* "More letters this way" affordances. Pointer-events: none
+              so they don't intercept touches. Fade in/out via opacity
+              so there's no layout shift. */}
+          <ScrollAffordance position="top" visible={scrollMore.up} />
+          <ScrollAffordance position="bottom" visible={scrollMore.down} />
         </div>
 
         {/* Mobile-only control strip — lifelines on the left, ✓ on the
@@ -574,6 +625,42 @@ export function PlayScreen({ game, dictionary }) {
           stays anchored to the viewport even as the player scrolls.
           Centered over the play surface. */}
       <Toasts toasts={game.toasts} />
+    </div>
+  );
+}
+
+// Chevron chip rendered at the top or bottom of the board scroll
+// region when there are tiles out of view in that direction. Lives
+// outside the scroll container (in its relative parent) so it stays
+// anchored to the viewport edge even as the player scrolls.
+function ScrollAffordance({ position, visible }) {
+  return (
+    <div
+      className={[
+        'pointer-events-none absolute left-0 right-0 flex justify-center transition-opacity duration-150 z-10',
+        position === 'top' ? 'top-1' : 'bottom-1',
+        visible ? 'opacity-100' : 'opacity-0',
+      ].join(' ')}
+      aria-hidden
+    >
+      <div className="bg-paper/90 border border-border rounded-full px-1.5 py-1 shadow-sm text-ink-500">
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          {position === 'top' ? (
+            <polyline points="6 15 12 9 18 15" />
+          ) : (
+            <polyline points="6 9 12 15 18 9" />
+          )}
+        </svg>
+      </div>
     </div>
   );
 }

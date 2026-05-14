@@ -143,11 +143,31 @@ the board is taller than the available space (mobile, where the full
 container scrolls internally; on desktop the board fits naturally
 and `overflow-y:auto` is a no-op.
 
-**Auto-scroll on row arrival.** A `useEffect` watches
-`game.totalTiles` via a `prevTotalTilesRef`. When the count
-increases (a row arrived; clears decrease it, scrambles don't change
-it) the container smoothly scrolls to its bottom so the
-freshly-arrived row is visible without manual scrolling.
+**Auto-scroll.**
+
+- **Game start.** A `[game.phase]`-keyed effect runs when the player
+  enters `'playing'`: it scrolls the container to its bottom
+  immediately AND once more 200 ms later. The double-fire catches
+  the post-settle layout — `useBoardGeometry`'s ResizeObserver
+  resolves asynchronously, so the *first* render uses the default
+  46-px tile size and a bottom-anchor computed from that lands wrong
+  once the mobile 64-px size kicks in. Both scrolls are `auto`
+  (instant) because the player hasn't engaged yet.
+- **Row arrival.** A `[game.totalTiles]`-keyed effect watches the
+  tile count via `prevTotalTilesRef`. On increase (a row arrived —
+  clears decrease it, scrambles don't change it) the container
+  *smoothly* scrolls to its bottom so the freshly-arrived row is
+  visible without manual scrolling.
+
+**Out-of-view affordances.** A relative wrapper around the scroll
+container renders two chevron chips (top, bottom), pointer-events:
+none, fading in via opacity. State is computed from `scrollTop` +
+`clientHeight` + `scrollHeight` via a scroll listener and a
+ResizeObserver on the container; both are re-attached when
+`boardGeometry.tileSize` changes (since scrollHeight changes with
+it). Up chevron shows when there's content above the viewport, down
+chevron when there's content below — invisible on desktop where
+the board fits.
 
 **Touch model.**
 
@@ -815,6 +835,25 @@ rather than overcounting via Scrabble-tournament short words.
 ---
 
 ## 10. Change log
+
+- **2026-05-13 — Initial scroll fix + out-of-view chevron affordances.**
+  - **Game-start scroll to bottom.** PlayScreen's earlier auto-scroll
+    only fired on `totalTiles` increase; the increase from 0 → 15
+    happens *before* `useBoardGeometry`'s ResizeObserver has settled
+    on the mobile tile size, so the scrollTo landed against the
+    default-geometry layout and the actual bottom of the board ended
+    up out of view. Added a `[game.phase]`-keyed effect that
+    scrolls immediately on `'playing'` *and* re-scrolls after a
+    200 ms delay to catch the post-settle layout. Both scrolls use
+    `behavior: 'auto'` (instant) since the player hasn't engaged yet.
+  - **"More tiles this way" chevron chips.** Small fading chips at
+    the top / bottom edges of the board scroll region, visible when
+    `scrollTop > 4` (content above) or
+    `scrollTop + clientHeight < scrollHeight - 4` (content below).
+    Implementation: relative wrapper around the scroll container,
+    chips are absolute, pointer-events: none, z-10. State tracked
+    via a scroll listener + ResizeObserver, re-bound when
+    `boardGeometry.tileSize` changes.
 
 - **2026-05-13 — Center-biased hit zone for drag selection.**
   - **Symptom.** Diagonal drags on mobile frequently picked up the
