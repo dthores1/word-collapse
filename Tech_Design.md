@@ -836,6 +836,22 @@ rather than overcounting via Scrabble-tournament short words.
 
 ## 10. Change log
 
+- **2026-05-13 — Quit button matches Wordsmith design.**
+  - New `src/components/QuitButton.jsx`, ported from Wordsmith's
+    `QuitButton`: 40 × 40 transparent rounded button with a
+    red-circle + white-square SVG glyph; hover gets a subtle
+    `bg-danger-500/10` tint, the glyph scales up 110% with a
+    `brightness-90` pass, and a `font-label` tooltip ("Quit game")
+    fades in below. `tabIndex={-1}` + `onMouseDown` preventDefault
+    keep the desktop text input focused when the player clicks.
+  - PlayScreen replaces both the mobile and desktop stop-button
+    inline buttons with `<QuitButton onClick={game.stop} />`. The
+    flat-fill red circle / outline-stop icon are gone; the new
+    glyph carries the colour itself so the button reads as part of
+    the Wordsmith family rather than a Word-Collapse-specific
+    flat-fill control.
+  - Removed the now-unused `StopIcon` helper from PlayScreen.
+
 - **2026-05-13 — Initial scroll fix + out-of-view chevron affordances.**
   - **Game-start scroll to bottom.** PlayScreen's earlier auto-scroll
     only fired on `totalTiles` increase; the increase from 0 → 15

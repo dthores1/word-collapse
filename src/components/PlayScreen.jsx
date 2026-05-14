@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Board } from './Board.jsx';
 import { LifelinePanel } from './LifelinePanel.jsx';
+import { QuitButton } from './QuitButton.jsx';
 import { Toasts } from './Toasts.jsx';
 import { DIFFICULTY, MIN_WORD_LENGTH, ROWS } from '../game/constants.js';
 import { useBoardGeometry } from '../hooks/useBoardGeometry.js';
@@ -361,15 +362,9 @@ export function PlayScreen({ game, dictionary }) {
           <div className="justify-self-center font-display font-extrabold text-2xl text-primary-800 leading-none tabular-nums">
             {game.score}
           </div>
-          <button
-            type="button"
-            onClick={game.stop}
-            className="justify-self-end w-9 h-9 shrink-0 rounded-full bg-danger-500 hover:bg-danger-600 active:bg-danger-700 flex items-center justify-center shadow-md shadow-danger-500/40 transition"
-            aria-label="Stop game"
-            title="Stop game"
-          >
-            <StopIcon />
-          </button>
+          <div className="justify-self-end">
+            <QuitButton onClick={game.stop} />
+          </div>
         </div>
 
         {/* Mobile-only floating word display — sits between HUD and board.
@@ -417,15 +412,7 @@ export function PlayScreen({ game, dictionary }) {
           <div className="flex items-center gap-6">
             <Stat value={game.score} label="Score" tone="primary" big />
             <Stat value={game.wordsCount} label="Words" />
-            <button
-              type="button"
-              onClick={game.stop}
-              className="w-11 h-11 shrink-0 rounded-full bg-danger-500 hover:bg-danger-600 active:bg-danger-700 flex items-center justify-center shadow-lg shadow-danger-500/40 transition"
-              aria-label="Stop game"
-              title="Stop game"
-            >
-              <StopIcon />
-            </button>
+            <QuitButton onClick={game.stop} />
           </div>
         </div>
 
@@ -781,15 +768,6 @@ function ClockIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-ink-500">
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-
-function StopIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-paper">
-      <circle cx="12" cy="12" r="9" />
-      <rect x="9" y="9" width="6" height="6" rx="1" />
     </svg>
   );
 }
