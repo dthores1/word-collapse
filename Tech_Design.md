@@ -259,23 +259,39 @@ from each pool:
 - Pick a vowel count of 2 or 3, biased by `difficulty.vowelBias`
   (Chill 0.46 → 3 vowels ~46%, Frenzy 0.34 → 3 vowels ~34%).
 - Draw that many distinct vowels from the weighted pool
-  `AAAEEEIIIOOUU` — repetitions in the pool give E/A/I higher
-  selection probability without ever putting two of them in one row.
+  `AAAEEEEIIIOOU` — E becomes the most common pick (~31%) matching
+  English letter frequency; A and I are next (~23% each); O is ~15%
+  and U drops to ~8%. The old pool ran U-heavy (15%), which over
+  many rows produced gravity-packed bottom rows like `UUUTA`.
 - Always include 1 R/S/T/L/N anchor.
 - With probability `difficulty.rareLetterChance`, include 1 rare
   letter (J/Q/X/Z).
 - Fill remaining slots with distinct, *digraph-biased* consonants:
-  35% from `COMMON_HIGH = RSTLN`, 40% from `COMMON_MID = DHCMPG`
+  40% from `COMMON_HIGH = RSTLN`, 40% from `COMMON_MID = DHCMPG`
   (letters that form glue patterns like TH, SH, CH, CR, CL, PR, PL,
-  GR, MP, ND), 25% from `COMMON_OTHER = BFKVWY` (long tail).
+  GR, MP, ND), 20% from `COMMON_OTHER = BFKVWY` (long tail). The
+  trimmed long-tail share (was 25%) brings each OTHER letter
+  (K / V / W / Y in particular) from ~4.2% to ~3.3% per fill.
 - **Place vowels at non-adjacent slot positions.** Instead of a pure
-  random shuffle, `placeAvoidingAdjacentVowels` enumerates the
-  position sets of size `vowelCount` over 5 slots where no two chosen
-  indices are consecutive (6 sets for 2-vowel rows; the single
-  `{0,2,4}` set for 3-vowel rows), picks one uniformly, drops the
-  vowels in, and fills the rest with consonants. **No new row ever
-  has two horizontally-adjacent vowels.** Verified by 5000-row smoke
-  test: 0% horizontal adjacency.
+  random shuffle, `placeAvoidingAdjacentVowels` enumerates valid
+  position sets via `positionSets(len, count, maxAdjacent)` and
+  picks one. For 2-vowel rows there are 6 zero-adjacency options.
+  For 3-vowel rows the only strict no-adjacency option is `{0,2,4}`,
+  which would ossify columns 0/2/4 into vowel pillars over many
+  arrivals — so `pickVowelPositions` mixes in the six one-adjacency
+  sets with 50/50 weighting (50% strict `{0,2,4}`, 50% spread across
+  one-adjacency sets like `{0,1,3}`, `{1,3,4}`, etc.). Net effect:
+  most new rows have no horizontally-adjacent vowel pair; ~20% have
+  exactly one — a deliberate tradeoff for better column distribution.
+- **Adaptive vowel count.** `rollRow` accepts an optional `columns`
+  argument. When supplied, it computes the current
+  `vowelDensity(columns) = vowel tiles / total tiles` and throttles
+  the picked vowel count: at density > 0.55 the count drops by 1,
+  at density > 0.65 it's forced to 1. Verified: a saturated board
+  (~80% vowels) produces new rows with ~20% vowels, while a balanced
+  board (~44% vowels) sees no throttle and produces the normal ~48%
+  per row. This is the "self-correcting" mechanism that pulls a
+  vowel-heavy game back toward balance over a few arrivals.
 
 Hard guarantees: all 5 letters distinct, 2–3 vowels, ≤ 1 rare,
 ≥ 1 R/S/T/L/N anchor, **no horizontally-adjacent vowels within a
@@ -836,6 +852,72 @@ rather than overcounting via Scrabble-tournament short words.
 
 ## 10. Change log
 
+- **2026-05-16 — Countdown bar uses `scaleX` instead of `width`.**
+  - **Symptom.** User report: the bar's inline `style="width: 15%"`
+    updated visibly in DevTools, but the painted bar stayed at
+    75-90% width and "didn't reset when a new row arrived". Behaviour
+    was inconsistent run-to-run.
+  - **Root cause.** Animating `width` triggers layout on every
+    interpolation step. At 60 Hz rAF tick rate the bar's `width`
+    target was changing every ~16 ms with each tick dispatching a
+    new React render; browsers under load can starve those layout
+    updates and the bar gets stuck mid-transition.
+  - **Fix.** Inner div is now `w-full` (always 100% width) and uses
+    `transform: scaleX(1 - rowProgress)` with `transformOrigin: left`
+    to shrink visually from the right. Transforms run on the
+    compositor thread — no layout invalidation per tick, smooth
+    even when the main thread is busy. Added `willChange: transform`
+    so the browser prepares a layer up front.
+
+- **2026-05-16 — Vowel pool + adaptive vowel count.**
+  - **Vowel pool reweighted.** `AAAEEEIIIOOUU` → `AAAEEEEIIIOOU`:
+    E now 31% of picks (matching English letter frequency), U drops
+    from 15% → 8%. Verified by 5000-row letter-distribution smoke
+    test: per-tile rates E 13% / A 11% / I 11% / O 8% / U 4.5%
+    overall, much closer to natural English than before.
+  - **Adaptive vowel count.** `rollRow` now accepts a `columns`
+    argument and consults the current `vowelDensity` of the board
+    before picking. At density > 0.55 the picked count drops by 1
+    (e.g. 3 → 2); at density > 0.65 it's forced to a single vowel.
+    Self-corrects "vowel pillar" boards: new arrivals contribute
+    fewer vowels until the column distribution rebalances. Smoke
+    test on a saturated 80%-vowel board: new rows arrive at 20%
+    vowel ratio (was a steady ~48% regardless of context).
+  - **`COMMON_OTHER` weight 25% → 20%.** Long-tail letters
+    (B/F/K/V/W/Y) each drop from ~4.2% to ~3.3% per fill —
+    addresses the "occasionally too many K's" report. The extra 5%
+    rolls into `COMMON_HIGH` (R/S/T/L/N) which carries more
+    digraph-friendly weight anyway.
+
+- **2026-05-14 — Vowel-cluster fixes + countdown bar inverts.**
+  - **Diversify 3-vowel row placement.** Previous fix only allowed
+    the strict zero-adjacency set `{0,2,4}` for 3-vowel rows, which
+    meant columns 0/2/4 received a vowel every single 3-vowel
+    arrival and ossified into vowel pillars (one user report had
+    column 2 at 100% vowel and four `A`s adjacent across the bottom
+    row). New `pickVowelPositions` builds a weighted mix: 50%
+    chance of `{0,2,4}`, 50% spread across the six one-adjacency
+    sets (`{0,1,3}`, `{0,1,4}`, `{0,2,3}`, `{0,3,4}`, `{1,2,4}`,
+    `{1,3,4}`). 5000-row smoke test: column-2 vowel frequency
+    drops from ~60% to ~47%; ~20% of rows now carry one in-row
+    adjacent vowel pair (acceptable tradeoff for cross-row balance).
+    Generalised `nonAdjacentPositionSets` into
+    `positionSets(len, count, maxAdjacent)`.
+  - **`VOWEL_ADJACENCY_PENALTY` 5 → 15.** Earlier weight was only
+    a tie-breaker on candidate selection in `rollPlayableRow`; at
+    15 the penalty meaningfully steers the best-of-20 toward
+    arrivals that don't stack vowels onto vowel-heavy columns.
+  - **`SCRAMBLE_ATTEMPTS` 8 → 20.** Scramble was failing to escape
+    vowel-saturated boards because only 8 shuffles were sampled.
+    20 gives the scorer a deeper pool to pick a less-clustered
+    arrangement from.
+  - **Next-row countdown bar now depletes.** Inverted the bar so
+    `width = (1 - rowProgress) * 100%` — bar shrinks from right to
+    left, in sync with the "8s → 0s" countdown text. Dropped the
+    warn→danger gradient for a single colour (warn-500, or
+    danger-500 when the board is near overflow). Resolves user
+    report "the line wasn't moving with the row timer".
+
 - **2026-05-13 — Quit button matches Wordsmith design.**
   - New `src/components/QuitButton.jsx`, ported from Wordsmith's
     `QuitButton`: 40 × 40 transparent rounded button with a
@@ -847,7 +929,7 @@ rather than overcounting via Scrabble-tournament short words.
   - PlayScreen replaces both the mobile and desktop stop-button
     inline buttons with `<QuitButton onClick={game.stop} />`. The
     flat-fill red circle / outline-stop icon are gone; the new
-    glyph carries the colour itself so the button reads as part of
+    glyph carries the color itself so the button reads as part of
     the Wordsmith family rather than a Word-Collapse-specific
     flat-fill control.
   - Removed the now-unused `StopIcon` helper from PlayScreen.

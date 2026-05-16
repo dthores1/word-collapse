@@ -547,17 +547,27 @@ export function PlayScreen({ game, dictionary }) {
         <div className="flex shrink-0 flex-col items-center gap-4 sm:gap-5">
           {/* Next-row preview + arrival progress + countdown */}
           <div className="w-full max-w-sm space-y-2">
+          {/* Next-row countdown bar. **Depletes** from full → empty
+              as rowProgress climbs, so it reads as a clear countdown
+              alongside the "8s" text. We use a `scaleX` transform
+              instead of animating `width` because the bar receives a
+              new target every rAF tick — width transitions thrash
+              layout and get starved on busy browsers (the bar can
+              visually freeze even when the inline style is updating
+              in the DOM), whereas scaleX runs on the compositor
+              thread and stays smooth. Single color (warn → danger
+              when the board is near overflow) keeps the visual story
+              simple. */}
           <div className="h-2 rounded-full bg-ink-300/60 overflow-hidden">
             <div
               className={[
-                'h-full',
-                game.danger
-                  ? 'bg-gradient-to-r from-danger-500 to-danger-600'
-                  : 'bg-gradient-to-r from-warn-500 to-danger-500',
+                'h-full w-full origin-left',
+                game.danger ? 'bg-danger-500' : 'bg-warn-500',
               ].join(' ')}
               style={{
-                width: `${Math.min(100, game.rowProgress * 100)}%`,
-                transition: 'width 80ms linear',
+                transform: `scaleX(${Math.max(0, 1 - Math.min(1, game.rowProgress))})`,
+                transition: 'transform 80ms linear',
+                willChange: 'transform',
               }}
             />
           </div>

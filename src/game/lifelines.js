@@ -116,7 +116,7 @@ export function computeCollapse(columns) {
 // Returns { columns, changed }. `changed` is false only when no
 // reordering happened (e.g. board has < 2 tiles, or the shuffle
 // happened to land on the same arrangement — rare).
-const SCRAMBLE_ATTEMPTS = 8;
+const SCRAMBLE_ATTEMPTS = 20;
 
 function shuffleOnce(columns) {
   const all = columns.flat();

@@ -1,7 +1,7 @@
 // Circular icon button that triggers a game quit. Ported from
 // Wordsmith's QuitButton so the two games' headers feel like one
 // family: the iconic red-circle + white-square stop glyph rather than
-// a flat-filled coloured button.
+// a flat-filled colored button.
 //
 //   - Default state: transparent background; the icon carries the red.
 //   - Hover: subtle danger-tinted background ring, icon scales up

@@ -32,7 +32,12 @@ import { COLS, QUALITY_ATTEMPTS, ROWS } from './constants.js';
 // ---------------------------------------------------------------------
 // Letter pools
 // ---------------------------------------------------------------------
-const VOWELS = 'AAAEEEIIIOOUU'; // weighted-by-frequency vowel pool
+// Weighted vowel pool, calibrated to match English letter frequencies
+// more closely. E becomes the most common (31% of picks) rather than
+// tied with A and I; U drops from 15% to 8% because the old pool ran
+// runaway-U over many rows. Final per-pick odds:
+//   A 23%  E 31%  I 23%  O 15%  U 8%
+const VOWELS = 'AAAEEEEIIIOOU';
 
 // Three-tier consonant taxonomy:
 //   COMMON_HIGH — guaranteed in every row; the "wheel-of-fortune" anchors
@@ -55,12 +60,14 @@ function pickFrom(pool) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// Bias: 35% HIGH, 40% MID, 25% OTHER. Concentrates fill into letters that
-// actually form digraphs with vowels and with each other.
+// Bias: 40% HIGH, 40% MID, 20% OTHER. Concentrates fill into letters
+// that actually form digraphs with vowels and with each other; the
+// trimmed long-tail share (was 25%) brings each OTHER letter (K, V,
+// W, Y, etc.) down from ~4.2% to ~3.3% per fill.
 function pickFillLetter() {
   const r = Math.random();
-  if (r < 0.35) return pickFrom(COMMON_HIGH);
-  if (r < 0.75) return pickFrom(COMMON_MID);
+  if (r < 0.40) return pickFrom(COMMON_HIGH);
+  if (r < 0.80) return pickFrom(COMMON_MID);
   return pickFrom(COMMON_OTHER);
 }
 
@@ -88,6 +95,21 @@ function pickDistinct(pool, n, exclude = new Set()) {
   return out;
 }
 
+// Fraction of currently-on-board tiles that are vowels. Used by
+// rollRow to throttle vowel arrivals when the board is already
+// running vowel-heavy.
+function vowelDensity(columns) {
+  let total = 0;
+  let vowels = 0;
+  for (const col of columns) {
+    for (const tile of col) {
+      total++;
+      if (VOWEL_SET.has(tile.letter)) vowels++;
+    }
+  }
+  return total === 0 ? 0 : vowels / total;
+}
+
 function shuffleInPlace(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -96,45 +118,75 @@ function shuffleInPlace(arr) {
   return arr;
 }
 
-// Enumerate every length-`count` subset of [0..len-1] in which no two
-// chosen indices are consecutive. Used to place vowels into row slots
-// such that the row never has two horizontally-adjacent vowels.
+// Enumerate every length-`count` subset of [0..len-1] whose count of
+// adjacent index pairs is `<= maxAdjacent`.
 //
-// len=5 results:
-//   count=2 → 6 sets: {0,2},{0,3},{0,4},{1,3},{1,4},{2,4}
-//   count=3 → 1 set:  {0,2,4}  (only VCVCV avoids adjacency)
-function nonAdjacentPositionSets(len, count) {
+// len=5 examples:
+//   count=2, maxAdjacent=0 → 6 sets  {0,2},{0,3},{0,4},{1,3},{1,4},{2,4}
+//   count=3, maxAdjacent=0 → 1 set   {0,2,4}
+//   count=3, maxAdjacent=1 → 7 sets  {0,2,4} + the 6 one-adjacency sets
+//                                    ({0,1,3},{0,1,4},{0,2,3},
+//                                     {0,3,4},{1,2,4},{1,3,4})
+function positionSets(len, count, maxAdjacent) {
   const out = [];
-  function backtrack(start, picked) {
+  function backtrack(start, picked, adjPairs) {
     if (picked.length === count) {
       out.push(picked.slice());
       return;
     }
     for (let i = start; i < len; i++) {
+      const isAdj = picked.length > 0 && i === picked[picked.length - 1] + 1;
+      const nextAdj = adjPairs + (isAdj ? 1 : 0);
+      if (nextAdj > maxAdjacent) continue;
       picked.push(i);
-      backtrack(i + 2, picked);
+      backtrack(i + 1, picked, nextAdj);
       picked.pop();
     }
   }
-  backtrack(0, []);
+  backtrack(0, [], 0);
   return out;
 }
 
-// Drop vowels into `len` slots at one of the non-adjacent position
-// sets (chosen uniformly at random), fill the remaining slots with
-// consonants. Eliminates horizontal vowel adjacency within a row by
-// construction. Cross-row vowel adjacency (vertical / diagonal) is
-// handled separately by the scoreBoard penalty in rollPlayableRow.
+// Pick a slot-position set for `count` vowels in `len` slots. We
+// strongly prefer no-adjacency arrangements (no two horizontally
+// adjacent vowels in the new row), but for 3-vowel rows the only
+// no-adjacency option in 5 slots is {0,2,4} — repeating it forever
+// turns columns 0/2/4 into vowel pillars. So we mix in the six
+// one-adjacency sets, weighted so {0,2,4} is still the most common
+// outcome (~50%) and any single one-adjacency set is ~8%.
+function pickVowelPositions(len, count) {
+  const zero = positionSets(len, count, 0);
+  if (zero.length === 0) return null;
+  if (zero.length > 1) {
+    // 2-vowel rows in 5 slots already have 6 zero-adj options —
+    // plenty of variety, no need to mix in one-adj sets.
+    return zero[Math.floor(Math.random() * zero.length)];
+  }
+  // Only one zero-adj option (3-vowel case). Build a weighted pool:
+  // include {0,2,4} `oneAdj.length` times so it has 50% of the
+  // probability mass; one-adj sets share the other 50%.
+  const oneAdj = positionSets(len, count, 1).filter(
+    (s) => s.some((v, i) => v !== zero[0][i]),
+  );
+  if (oneAdj.length === 0) return zero[0];
+  if (Math.random() < 0.5) return zero[0];
+  return oneAdj[Math.floor(Math.random() * oneAdj.length)];
+}
+
+// Drop vowels into `len` slots at one of the chosen positions, fill
+// the rest with consonants. The selected position set has at most
+// one adjacent vowel pair within the row (most rows have zero); the
+// scoreBoard penalty in rollPlayableRow handles cross-row vowel
+// clustering by picking the best of N candidate rows.
 function placeAvoidingAdjacentVowels(vowels, consonants, len) {
   shuffleInPlace(vowels);
   shuffleInPlace(consonants);
-  const sets = nonAdjacentPositionSets(len, vowels.length);
-  if (sets.length === 0) {
-    // No valid placement (e.g. 4 vowels in 5 slots — can't happen with
-    // current 2-or-3-vowel constraint, but stay safe).
+  const positions = pickVowelPositions(len, vowels.length);
+  if (!positions) {
+    // No valid placement (e.g. > 3 vowels in 5 slots — can't happen
+    // with the 2-or-3-vowel constraint, but stay safe).
     return shuffleInPlace([...vowels, ...consonants]);
   }
-  const positions = sets[Math.floor(Math.random() * sets.length)];
   const result = new Array(len);
   positions.forEach((pos, i) => {
     result[pos] = vowels[i];
@@ -149,9 +201,25 @@ function placeAvoidingAdjacentVowels(vowels, consonants, len) {
 // ---------------------------------------------------------------------
 // Stratified row generation
 // ---------------------------------------------------------------------
-export function rollRow(difficulty) {
+// `columns` is optional — when supplied, the row generator throttles
+// the vowel count downward if the existing board is already
+// vowel-saturated. The base count comes from `difficulty.vowelBias`
+// (2 or 3 vowels per row); when the existing vowel density is
+// >55% we drop by 1, and >65% we force a single-vowel row. This
+// self-corrects "vowel pillar" boards: once columns start trending
+// vowel-heavy, new arrivals add fewer vowels and the density
+// gradually rebalances back to the algorithm's target.
+export function rollRow(difficulty, columns) {
   const len = COLS;
-  const vowelCount = Math.random() < difficulty.vowelBias ? 3 : 2;
+  let vowelCount = Math.random() < difficulty.vowelBias ? 3 : 2;
+  if (columns) {
+    const density = vowelDensity(columns);
+    if (density > 0.65) {
+      vowelCount = 1;
+    } else if (density > 0.55) {
+      vowelCount = Math.max(1, vowelCount - 1);
+    }
+  }
   const includeRare = Math.random() < difficulty.rareLetterChance;
 
   const used = new Set();
@@ -219,12 +287,12 @@ const LENGTH_POINTS = { 3: 10, 4: 20, 5: 35 };
 const NEW_ROW_BONUS = 5;
 const HIGHEST_ROW_BONUS = 5;
 // Each 8-adjacent vowel-vowel pair on the simulated grid costs the
-// candidate this many points. Calibrated to act as a tie-breaker
-// between similar-word-count candidates without dominating the
-// playability signal — at typical board densities (~30 pairs random,
-// ~10 pairs constructive-placement) the per-candidate delta is on
-// the order of 100 points, comparable to a single length-5 word.
-const VOWEL_ADJACENCY_PENALTY = 5;
+// candidate this many points. Calibrated to meaningfully steer
+// rollPlayableRow's best-of-20 selection toward arrivals that don't
+// pile vowels onto already-vowel-heavy columns. At an earlier
+// weight of 5 the penalty was a tie-breaker only, and games would
+// still trend toward "AAAA"-style bottom rows over many arrivals.
+const VOWEL_ADJACENCY_PENALTY = 15;
 
 // Build the 2D grid view that *would* exist if `letters` arrived as the
 // next row on top of `columns`. New tiles get negative ids so the scorer
@@ -405,14 +473,14 @@ export function scoreBoard(grid, dictionary) {
 const SEED_QUALITY = { minLongWords: 0, minNewRowUses: 0, minHighestUses: 0 };
 
 export function rollPlayableRow(difficulty, columns, dictionary) {
-  if (!dictionary) return rollRow(difficulty);
+  if (!dictionary) return rollRow(difficulty, columns);
 
   const totalTiles = columns.reduce((acc, col) => acc + col.length, 0);
   const targets = totalTiles === 0 ? SEED_QUALITY : difficulty.quality;
 
   let best = null;
   for (let i = 0; i < QUALITY_ATTEMPTS; i++) {
-    const row = rollRow(difficulty);
+    const row = rollRow(difficulty, columns);
     const grid = simulateArrival(columns, row);
     const result = scoreBoard(grid, dictionary);
 
@@ -431,7 +499,7 @@ export function rollPlayableRow(difficulty, columns, dictionary) {
 
   // No candidate hit the bar — return the highest-scoring fallback so
   // even pathological RNG sequences don't strand the player.
-  return best?.row ?? rollRow(difficulty);
+  return best?.row ?? rollRow(difficulty, columns);
 }
 
 // ---------------------------------------------------------------------
